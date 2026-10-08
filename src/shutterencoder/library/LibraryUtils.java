@@ -1313,58 +1313,62 @@ public class LibraryUtils extends Shutter {
 	}
 
 	public static boolean isReadable(File file) {
-		
-		try {	
-			
-			ProcessBuilder processFFMPEG;
-			if (System.getProperty("os.name").contains("Windows"))
-			{							
-				processFFMPEG = new ProcessBuilder('"' + FFMPEG.PathToFFMPEG + '"' + " -strict " + Settings.comboStrict.getSelectedItem() + " -hide_banner -i " + '"' + file + '"' + " -t 5 -f null -" + '"');
-				FFMPEG.process = processFFMPEG.start();
+		Process probe = null;
+		try {
+			String executable = FFMPEG.PathToFFMPEG;
+			if (!System.getProperty("os.name").contains("Windows")) {
+				// The shared library path is escaped for shell-based callers.
+				executable = executable.replace("\\ ", " ");
 			}
-			else
-			{
-				processFFMPEG = new ProcessBuilder("/bin/bash", "-c" , FFMPEG.PathToFFMPEG + " -strict " + Settings.comboStrict.getSelectedItem() + " -hide_banner -i " + '"' + file + '"' + " -t 5 -f null -");							
-				FFMPEG.process = processFFMPEG.start();
-			}		
-						
+			ProcessBuilder processFFMPEG = new ProcessBuilder(executable,
+					"-nostdin", "-strict", Settings.comboStrict.getSelectedItem().toString(),
+					"-hide_banner", "-i", file.toString(), "-t", "5", "-f", "null", "-");
+			FFMPEG.setEnvironment(processFFMPEG);
+			processFFMPEG.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+			probe = processFFMPEG.start();
+
 			Console.consoleFFMPEG.append(language.getProperty("command") + " -strict " + Settings.comboStrict.getSelectedItem() + " -hide_banner -i " + '"' + file + '"' + " -t 5 -f null -");
-			
+
 			String line;
-	
-			BufferedReader input = new BufferedReader(new InputStreamReader(FFMPEG.process.getErrorStream()));		
-								
-			Console.consoleFFMPEG.append(System.lineSeparator());
-			
-			while ((line = input.readLine()) != null)
-			{			
-				Console.consoleFFMPEG.append(line + System.lineSeparator() );		
-				
-				//Erreurs
-				if (line.contains("No such file or directory")
-					|| line.contains("Invalid data found")
-					|| line.contains("moov atom not found")
-					|| line.contains("Operation not permitted")
-					|| line.contains("File ended prematurely")
-					|| line.contains("Warning MVs not available")
-					|| line.contains("broken or empty index")
-					|| line.contains("corrupt decoded frame")
-					|| line.contains("invalid new backstep")
-					|| line.contains("Packet corrupt")
-					|| line.contains("ac-tex damaged")
-					|| line.contains("Error"))
+
+			try (BufferedReader input = new BufferedReader(new InputStreamReader(probe.getErrorStream()))) {
+
+				Console.consoleFFMPEG.append(System.lineSeparator());
+
+				while ((line = input.readLine()) != null)
 				{
-					return false;
-				} 																		
-			}			
-	   				
+					Console.consoleFFMPEG.append(line + System.lineSeparator() );
+
+					//Erreurs
+					if (line.contains("No such file or directory")
+						|| line.contains("Invalid data found")
+						|| line.contains("moov atom not found")
+						|| line.contains("Operation not permitted")
+						|| line.contains("File ended prematurely")
+						|| line.contains("Warning MVs not available")
+						|| line.contains("broken or empty index")
+						|| line.contains("corrupt decoded frame")
+						|| line.contains("invalid new backstep")
+						|| line.contains("Packet corrupt")
+						|| line.contains("ac-tex damaged")
+						|| line.contains("Error"))
+					{
+						return false;
+					}
+				}
+			}
+
 			Console.consoleFFMPEG.append(System.lineSeparator());
-			
-		} catch (IOException io) {//Bug Linux							
-		} catch (Exception e) {
+			return probe.waitFor() == 0;
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 			return false;
+		} catch (IOException e) {
+			return false;
+		} finally {
+			if (probe != null && probe.isAlive()) {
+				probe.destroyForcibly();
+			}
 		}
-		
-		return true;
 	}
 }

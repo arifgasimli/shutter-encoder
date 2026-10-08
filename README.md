@@ -1,5 +1,9 @@
 # 🎬 Shutter Encoder
 
+> **Unofficial fork:** Windows x64 single-file builds with focused bug fixes.
+> [Download the latest EXE](https://github.com/arifgasimli/shutter-encoder/releases/latest)
+> · [Fork changes and build instructions](FORK.md)
+
 ![Downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.shutterencoder.com%2Fdownloads-badge.php%3Fcolor%3De05d44%26labelColor%3D555&style=flat-square&v=1)
 [![GitHub stars](https://img.shields.io/github/stars/paulpacifico/shutter-encoder?style=flat-square&color=f1c40f&labelColor=555)](https://github.com/paulpacifico/shutter-encoder/stargazers)
 [![GitHub license](https://img.shields.io/github/license/paulpacifico/shutter-encoder?style=flat-square)](LICENSE)

@@ -102,17 +102,17 @@ public class Timecode extends Shutter {
                        
             return " -timecode " + '"' + TCset1.getText() + ":" + TCset2.getText() + ":" + TCset3.getText() + dropFrame + TCset4.getText() + '"' + audioTimecode;
 		}
-		else if (FFPROBE.timecode1 != "")
+		else if (!FFPROBE.timecode1.isEmpty())
 		{						
-			if (InputAndOutput.inPoint != "")
+			if (!InputAndOutput.inPoint.isEmpty())
             {
 				double time = (Integer.valueOf(FFPROBE.timecode1) + Integer.valueOf(VideoPlayerUI.caseInH.getText())) * 3600000
 							+ (Integer.valueOf(FFPROBE.timecode2) + Integer.valueOf(VideoPlayerUI.caseInM.getText())) * 60000
 							+ (Integer.valueOf(FFPROBE.timecode3) + Integer.valueOf(VideoPlayerUI.caseInS.getText())) * 1000
 							+ (Integer.valueOf(FFPROBE.timecode4) + Integer.valueOf(VideoPlayerUI.caseInF.getText())) * VideoPlayerUI.inputFramerateMS;	
 				
-				String h = Shutter.formatter.format(Math.floor(time / 1000) / 3600);
-				String m = Shutter.formatter.format((Math.floor(time / 1000) / 60) % 60);
+				String h = Shutter.formatter.format(Math.floor(time / 3600000));
+				String m = Shutter.formatter.format(Math.floor(time / 60000) % 60);
 				String s = Shutter.formatter.format(Math.floor(time / 1000) % 60);    		
 				String f = Shutter.formatter.format((time % 1000) / VideoPlayerUI.inputFramerateMS);
 				
