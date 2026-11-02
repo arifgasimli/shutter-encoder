@@ -91,7 +91,7 @@ public class Corrections extends Shutter {
 		
 		if (Shutter.caseBanding.isSelected())
 		{
-			if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+			if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 			{
 				filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "deband=1:deband_radius=32");
 			}

@@ -96,12 +96,16 @@ public class VideoPlayerCore extends VideoPlayerUI {
     public static boolean bufferIsReadingFrames = false;
     public static ArrayList<Image> bufferedFrames = new ArrayList<Image>();
     public static int maxBufferedFrames = 500;
+    private static final long MAX_BUFFER_BYTES = 256L * 1024 * 1024;
 	private static int maximumSeek = 60;
     public static BufferedImage fullSizeWatermark;
     public static int activeSegmentIndex = -1;
     public static int dragSegmentIndex = -1;
     private static final Object playerLock = new Object();
     private static final Object setTimeLock = new Object();
+    private static Double pendingSeek;
+    private static String pendingSeekPath;
+    private static long seekRevision;
     private static long lastEvTime = 0;
     private static String freezeFrame = "";
         	
@@ -118,6 +122,29 @@ public class VideoPlayerCore extends VideoPlayerUI {
         return t;
     });
 	
+	private static final java.util.Map<Process, List<Process>> pipelineUpstream =
+		java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+	/** Kills a video process and any upstream process of its pipeline. */
+	private static void destroyVideoProcess(Process process) {
+		if (process == null) return;
+		process.destroyForcibly();
+		List<Process> upstream = pipelineUpstream.remove(process);
+		if (upstream != null) {
+			for (Process p : upstream) p.destroyForcibly();
+		}
+	}
+
+	/** Releases the native audio line so a new one can be opened without leaking. */
+	private static void closeAudioLine(SourceDataLine audioLine) {
+		if (audioLine == null) return;
+		try {
+			audioLine.stop();
+			audioLine.flush();
+			audioLine.close();
+		} catch (Exception e) {}
+	}
+
 	private static Process startVideoProcess(double inputTime) throws IOException, InterruptedException {
 
 	    String args = setVideoCommand(inputTime, player.getWidth(), player.getHeight(), playerPlayVideo);
@@ -143,7 +170,10 @@ public class VideoPlayerCore extends VideoPlayerUI {
 	        else if (LibraryUtils.libplaceboAvailable) FFMPEG.setEnvironment(pb2);
 
 	        List<Process> processes = ProcessBuilder.startPipeline(List.of(pb1, pb2));
-	        return processes.get(processes.size() - 1);
+	        Process last = processes.get(processes.size() - 1);
+	        // Only the last process is returned; remember the upstream ones so they get killed too
+	        pipelineUpstream.put(last, processes.subList(0, processes.size() - 1));
+	        return last;
 	    }
 	    else
 	    {
@@ -159,7 +189,10 @@ public class VideoPlayerCore extends VideoPlayerUI {
 	public static void playerProcess(double inputTime, Process preStartedVideoProcess) {
 
 	    if (Utils.loadEncFile != null && Utils.loadEncFile.isAlive())
+	    {
+	    	destroyVideoProcess(preStartedVideoProcess);
 	        return;
+	    }
 
 	    try {
 
@@ -186,14 +219,16 @@ public class VideoPlayerCore extends VideoPlayerUI {
 					audioInputStream = AudioSystem.getAudioInputStream(audio);		    
 				    AudioFormat audioFormat = audioInputStream.getFormat();
 			        DataLine.Info info = new DataLine.Info(SourceDataLine.class,audioFormat);
-			        
-			        line = (SourceDataLine) AudioSystem.getLine(info);
-			        if (audioHardwareOutput != null)
-			        {
-			        	line = (SourceDataLine) audioHardwareOutput.getLine(info);
-			        }			        	
-			        
-		            line.open(audioFormat);
+
+			        //Release the previous line, otherwise every seek leaks an open native audio line
+			        closeAudioLine(line);
+
+			        SourceDataLine newLine = audioHardwareOutput != null
+			        		? (SourceDataLine) audioHardwareOutput.getLine(info)
+			        		: (SourceDataLine) AudioSystem.getLine(info);
+
+		            newLine.open(audioFormat);
+		            line = newLine;
 		            gainControl = (FloatControl) line.getControl(FloatControl.Type.MASTER_GAIN);
 		            
 		            float gain = (float) sliderVolume.getValue() / 100;   
@@ -576,25 +611,32 @@ public class VideoPlayerCore extends VideoPlayerUI {
 			    AudioFormat audioFormat = audioInputStream.getFormat();
 		        DataLine.Info info = new DataLine.Info(SourceDataLine.class,audioFormat);
 		        
-		        SourceDataLine line = (SourceDataLine) AudioSystem.getLine(info);
-		        if (audioHardwareOutput != null)
-		        {
-		        	line = (SourceDataLine) audioHardwareOutput.getLine(info);
-		        }
-		        
+		        SourceDataLine line = audioHardwareOutput != null
+		        		? (SourceDataLine) audioHardwareOutput.getLine(info)
+		        		: (SourceDataLine) AudioSystem.getLine(info);
+
 	            line.open(audioFormat);
-	            FloatControl gainControl = (FloatControl) line.getControl(FloatControl.Type.MASTER_GAIN);
-	            line.start();	
-	            
-	            byte bytes[] = new byte[4096];
-	            int bytesRead = 0;
-	            
-				float gain = (float) sliderVolume.getValue() / 100;   
-				float dB = (float) ((float) (Math.log(gain) / Math.log(10.0) * 20.0) + ((float) sliderVolume.getValue() / ((float) 100 / 6)));
-		        
-		        gainControl.setValue(dB);		        
-		        bytesRead = audioInputStream.read(bytes, 0, bytes.length);
-        		line.write(bytes, 0, bytesRead);
+	            try {
+		            FloatControl gainControl = (FloatControl) line.getControl(FloatControl.Type.MASTER_GAIN);
+		            line.start();
+
+		            byte bytes[] = new byte[4096];
+		            int bytesRead = 0;
+
+					float gain = (float) sliderVolume.getValue() / 100;
+					float dB = (float) ((float) (Math.log(gain) / Math.log(10.0) * 20.0) + ((float) sliderVolume.getValue() / ((float) 100 / 6)));
+
+			        gainControl.setValue(dB);
+			        bytesRead = audioInputStream.read(bytes, 0, bytes.length);
+			        if (bytesRead > 0)
+			        {
+			        	line.write(bytes, 0, bytesRead);
+			        	line.drain();
+			        }
+	            } finally {
+	            	//This line is opened for a single audio frame: always release it
+	            	line.close();
+	            }
 
 				try {
 					audio.close();
@@ -635,7 +677,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 				videoInputStream.close();
 			} catch (IOException e) {}
 			
-			playerVideo.destroyForcibly();
+			destroyVideoProcess(playerVideo);
 			try {
 				playerThread.interrupt();
 			} catch(Exception e) {}
@@ -698,23 +740,34 @@ public class VideoPlayerCore extends VideoPlayerUI {
 	}
 	
 	public static void playerSetTime(double inputTime) {
-					
+
 		if (fileDuration <= 40)
 			return;
-		 
+
 		synchronized (setTimeLock)
-		{		
+		{
+			seekRevision++;
 			if (setTime != null && setTime.isAlive())
-		        return;
-			
+			{
+				VideoPlayerUtils.invalidatePreview();
+				pendingSeek = inputTime;
+				pendingSeekPath = videoPath;
+				return;
+			}
+
 			if ((frameVideo != null || playerCurrentFrame > 0)
 			&& playerThread != null && Shutter.doNotLoadImage == false && videoPath != null)
-			{			
+			{
+				// Only a seek that really runs makes a pending still preview obsolete.
+				// Invalidating on a no-op request discarded the first frame of a newly
+				// loaded file and left the player black.
+				VideoPlayerUtils.invalidatePreview();
+
 				setTime = new Thread(new Runnable() {
 	
 					@Override
 					public void run() {					
-						
+						try {
 						previewUpscale = false;
 						Shutter.frame.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
 						
@@ -808,8 +861,10 @@ public class VideoPlayerCore extends VideoPlayerUI {
 									
 									playerCurrentFrame += 1;
 									
-									//Limit the buffer size into memory								
-									if (bufferedFrames.size() > maxBufferedFrames) 
+									//Limit the buffer size into memory: by frame count and by bytes, large players would otherwise use GBs
+									long frameBytes = (long) frameVideo.getWidth() * frameVideo.getHeight() * (frameVideo.getType() == BufferedImage.TYPE_4BYTE_ABGR ? 4 : 2);
+									int maxFrames = (int) Math.max(30, Math.min(maxBufferedFrames, MAX_BUFFER_BYTES / Math.max(1, frameBytes)));
+									while (bufferedFrames.size() > maxFrames)
 									{
 										bufferedFrames.remove(0);
 									}
@@ -951,6 +1006,30 @@ public class VideoPlayerCore extends VideoPlayerUI {
 						Shutter.windowDrag = false;
 								
 						VideoPlayerMultiCuts.updateCurrentSegment();
+						} finally {
+							synchronized (setTimeLock) {
+								setTime = new Thread();
+								if (pendingSeek != null) {
+									double next = pendingSeek;
+									String path = pendingSeekPath;
+									long revision = seekRevision;
+									pendingSeek = null;
+										javax.swing.SwingUtilities.invokeLater(() -> {
+										synchronized (setTimeLock) {
+											if (revision == seekRevision && java.util.Objects.equals(path, videoPath)) playerSetTime(next);
+										}
+									});
+								} else {
+									long completedRevision = seekRevision;
+									javax.swing.SwingUtilities.invokeLater(() -> {
+										synchronized (setTimeLock) {
+											if (completedRevision != seekRevision) return;
+										}
+										VideoPlayerMultiCuts.updateCurrentSegment();
+									});
+								}
+							}
+						}
 					}
 					
 				});
@@ -1026,16 +1105,20 @@ public class VideoPlayerCore extends VideoPlayerUI {
 			return;
 		}
 			
+		// A finishing seek acquires setTimeLock to dispatch its pending request.
+		// Never hold that lock while waiting for the seek thread to exit.
+		Thread previousSeek = setTime;
+		if (previousSeek != null) {
+			try {
+				previousSeek.join();
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+		}
 		synchronized (setTimeLock)
 		{
-			if (setTime != null)
-			{
-				try {
-					setTime.join();			
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-				}		
-			}
+			if (setTime != null && setTime.isAlive()) return;
 			
 			setTime = new Thread(new Runnable() {
 
@@ -1216,7 +1299,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 				if (Shutter.comboAccel.getSelectedItem().equals("Vulkan Video")
 				|| Shutter.comboGPUDecoding.getSelectedItem().toString().equals("vulkan")
 				|| Shutter.comboGPUFilter.getSelectedItem().toString().equals("vulkan")
-				|| Libplacebo.useLibplaceboFilters) //Always need to choose the GPU
+				|| Libplacebo.useLibplaceboFilters.get()) //Always need to choose the GPU
 				{
 					if (LibraryUtils.GPUCount > 1) //GPU 0 is always the integrated, GPU 1 is AMD or Nvidia or Intel which should be much faster
 					{
@@ -1420,6 +1503,10 @@ public class VideoPlayerCore extends VideoPlayerUI {
 	}
 	        
 	protected static String setFilter(boolean noGPU, boolean noDeinterlacing) {
+		return setFilter(noGPU, noDeinterlacing, VideoPlayerUtils.preview != null);
+	}
+
+	protected static String setFilter(boolean noGPU, boolean noDeinterlacing, boolean stillFrame) {
 				
 		if (Settings.btnPreviewOutput.isSelected() || mouseIsPressed || previousFrame)
 		{
@@ -1488,7 +1575,8 @@ public class VideoPlayerCore extends VideoPlayerUI {
 		}	
 		
 		//Rotate
-		if (Shutter.caseRotate.isSelected() || Shutter.caseMiror.isSelected())
+		boolean scalingFirst = FFPROBE.imageResolution != null && VideoEncoders.setScalingFirst();
+		if (!scalingFirst && (Shutter.caseRotate.isSelected() || Shutter.caseMiror.isSelected()))
 		{
 			filter = shutterencoder.functions.settings.Image.setRotate(filter, noGPU);
 		}
@@ -1501,7 +1589,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 		String bitDepth = FFPROBE.imageDepth == 10 ? "p010" : "nv12";	
 
 		//Crop & Pad
-		if (Shutter.comboResolution.getSelectedItem().toString().equals(Shutter.language.getProperty("source")) == false && Shutter.comboResolution.getSelectedItem().toString().contains("AI") == false && noGPU == false && Shutter.inputDeviceIsRunning == false)
+		if (Shutter.comboResolution.getSelectedItem().toString().equals(Shutter.language.getProperty("source")) == false && Shutter.comboResolution.getSelectedItem().toString().contains("AI") == false && Shutter.inputDeviceIsRunning == false)
 		{				
 			filter = shutterencoder.functions.settings.Image.setScale(filter, false, noGPU);
 
@@ -1516,13 +1604,18 @@ public class VideoPlayerCore extends VideoPlayerUI {
 		}
 		else			
 		{
-			if (Shutter.caseRotate.isSelected() && (Shutter.comboRotate.getSelectedIndex() == 1 || Shutter.comboRotate.getSelectedIndex() == 2))
+			if (!stillFrame && Shutter.caseRotate.isSelected() && (Shutter.comboRotate.getSelectedIndex() == 1 || Shutter.comboRotate.getSelectedIndex() == 2))
 			{
 				width = player.getHeight();
 				height = player.getWidth();		
 			}
 		}
 		
+		if (scalingFirst && (Shutter.caseRotate.isSelected() || Shutter.caseMiror.isSelected()))
+		{
+			filter = shutterencoder.functions.settings.Image.setRotate(filter, noGPU);
+		}
+
 		//Zoom
 		if (Shutter.caseEnableColorimetry.isSelected() && Shutter.sliderZoom.getValue() != 0)
 		{	
@@ -1530,7 +1623,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 		}
 
 		//Reduce quality
-		if (VideoPlayerUtils.preview == null)
+		if (!stillFrame)
 		{
 			Dimension dim = getDimension(width, height, comboPlayerQuality.getSelectedIndex());
 			width  = dim.width;
@@ -1599,7 +1692,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 			}*/
 			else
 			{
-				if (Libplacebo.useLibplaceboFilters && filter.contains("hwdownload") == false
+				if (Libplacebo.useLibplaceboFilters.get() && filter.contains("hwdownload") == false
 				&& (filter.contains("libplacebo") == false || filter.replace(",scale", "scale").substring(filter.indexOf("libplacebo")).contains(",") == false))
 				{			
 					filter = Libplacebo.setLibplaceboFilter(filter, "w=" + width + ":h=" + height + ":downscaler=" + algorithm.replace("neighbor", "nearest") + ":upscaler=" + algorithm.replace("neighbor", "nearest") + ":reset_sar=1");
@@ -1614,7 +1707,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 		}
 		else
 		{
-			if (Libplacebo.useLibplaceboFilters && filter.contains("hwdownload") == false
+			if (Libplacebo.useLibplaceboFilters.get() && filter.contains("hwdownload") == false
 			&& (filter.contains("libplacebo") == false || filter.replace(",scale", "scale").substring(filter.indexOf("libplacebo")).contains(",") == false))
 			{		
 				filter = Libplacebo.setLibplaceboFilter(filter, "w=" + width + ":h=" + height + ":downscaler=" + algorithm.replace("neighbor", "nearest") + ":upscaler=" + algorithm.replace("neighbor", "nearest") + ":reset_sar=1");
@@ -1643,7 +1736,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 		filter = Colorimetry.setMetadata(filter);
 		
 		//Blend
-		if (VideoPlayerUtils.preview == null) //Show only on playing
+		if (!stillFrame) //Show only on playing
 		{
 			filter = ImageSequence.setBlend(filter);
 			filter = ImageSequence.setMotionBlur(filter);
@@ -1689,7 +1782,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 		filter = Corrections.setDenoiser(filter, noGPU);
 		
 		//Exposure
-		if (VideoPlayerUtils.preview == null) //Show only on playing
+		if (!stillFrame) //Show only on playing
 			filter = Corrections.setSmoothExposure(filter);	
 		
 		//Levels
@@ -1729,10 +1822,14 @@ public class VideoPlayerCore extends VideoPlayerUI {
 				filter += ",setpts=4*PTS";				
 		}
 		
+		// Still frames are decoded at these exact dimensions, independently of
+		// playback quality, quarter turns and colormatrix alignment requirements.
+		if (stillFrame) filter += ",scale=" + player.getWidth() + ":" + player.getHeight();
+
 		//Add filters
 		filter = " -vf " + '"' + filter;
 		
-		if (caseVuMeter.isSelected() && FFPROBE.hasAudio && Shutter.caseAddSubtitles.isSelected() == false && VideoPlayerUtils.preview == null)
+		if (caseVuMeter.isSelected() && FFPROBE.hasAudio && Shutter.caseAddSubtitles.isSelected() == false && !stillFrame)
 		{
 			String aspeed = "";
 						
@@ -1823,7 +1920,7 @@ public class VideoPlayerCore extends VideoPlayerUI {
 				int playerWidth = player.getWidth();
 				int playerHeight = player.getHeight();
 				
-				if (comboPlayerQuality.isVisible() && comboPlayerQuality.getSelectedIndex()!= 0 && FFPROBE.hasAlpha == false && VideoPlayerUtils.preview == null && Settings.btnPreviewOutput.isSelected() == false)
+				if (comboPlayerQuality.isVisible() && comboPlayerQuality.getSelectedIndex()!= 0 && FFPROBE.hasAlpha == false && !stillFrame && Settings.btnPreviewOutput.isSelected() == false)
 				{
 					Dimension dim = getDimension(subsWidth, subsPosY, comboPlayerQuality.getSelectedIndex());
 					subsWidth = dim.width;

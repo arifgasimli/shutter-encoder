@@ -118,6 +118,14 @@ public static String colorspace = "";
 public static String colortransfer = "";
 public static String colorprimaries = "";
 
+	public static boolean rotationSwapsDimensions(String rotation) {
+		try {
+			return Math.abs(Double.parseDouble(rotation.trim())) % 180 == 90;
+		} catch (NumberFormatException e) {
+			return false;
+		}
+	}
+
 	public static void Data(final String file) {	
 
 		if (file == null)
@@ -774,7 +782,7 @@ public static String colorprimaries = "";
 			              {			            	  
 			            	  String s[] = line.split("=");
 			                	
-			            	  if (s[1].contains("90"))
+				  if (rotationSwapsDimensions(s[1]))
 			            	  {
 				            	  isRotated = true;
 			            	  }			            	  

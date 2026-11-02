@@ -72,6 +72,52 @@ public class Console extends JFrame {
 	public static JTextArea consoleXPDFREADER = new JTextArea();
 	public static JTextArea consoleNCNN = new JTextArea();
 	public static JTextArea consolePYTHON = new JTextArea();
+
+	//Logs are appended for the whole session (every FFmpeg progress line), so keep only the most recent text
+	private static final int MAX_CONSOLE_CHARS = 1_000_000;
+
+	static {
+		for (JTextArea area : new JTextArea[] { consoleFFMPEG, consoleFFPROBE, consoleBMXTRANSWRAP, consoleDVDAUTHOR,
+				consoleTSMUXER, consoleMEDIAINFO, consoleYOUTUBEDL, consoleDCRAW, consoleEXIFTOOL, consoleXPDFREADER,
+				consoleNCNN, consolePYTHON })
+		{
+			limitLength(area);
+		}
+	}
+
+	private static void limitLength(JTextArea area) {
+
+		final java.util.concurrent.atomic.AtomicBoolean trimScheduled = new java.util.concurrent.atomic.AtomicBoolean();
+
+		area.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+
+			@Override
+			public void insertUpdate(javax.swing.event.DocumentEvent e) {
+
+				//The document cannot be changed from inside its own listener: trim later, once per burst of appends
+				if (e.getDocument().getLength() > MAX_CONSOLE_CHARS && trimScheduled.compareAndSet(false, true))
+				{
+					javax.swing.SwingUtilities.invokeLater(() -> {
+						try {
+							javax.swing.text.Document doc = area.getDocument();
+							int excess = doc.getLength() - MAX_CONSOLE_CHARS / 2;
+							if (excess > 0)
+								doc.remove(0, excess);
+						} catch (javax.swing.text.BadLocationException ex) {
+						} finally {
+							trimScheduled.set(false);
+						}
+					});
+				}
+			}
+
+			@Override
+			public void removeUpdate(javax.swing.event.DocumentEvent e) {}
+
+			@Override
+			public void changedUpdate(javax.swing.event.DocumentEvent e) {}
+		});
+	}
 	public static JTabbedPane tabbedPane;
 	private JScrollPane scrollFFMPEG;
 	private JScrollPane scrollFFPROBE;

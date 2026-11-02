@@ -307,6 +307,8 @@ public class Shutter {
 	public static JCheckBox caseChangeFolder1;
 	public static JCheckBox caseChangeFolder2;
 	public static JCheckBox caseChangeFolder3;
+	public static final String DEFAULT_PREFIX = "{fps}fps_se_";
+	public static final String DEFAULT_SUFFIX = "_H.264_{height}_{width}_{fps}";
 	public static JCheckBox casePrefix;
 	public static JTextField txtPrefix;
 	public static JCheckBox btnExtension;
@@ -4780,7 +4782,10 @@ public class Shutter {
 		txtPrefix = new JTextField();
 		txtPrefix.setName("txtPrefix");
 		txtPrefix.setColumns(10);
-		txtPrefix.setEnabled(false);
+		// Predefined prefix, on by default
+		casePrefix.setSelected(true);
+		txtPrefix.setText(DEFAULT_PREFIX);
+		txtPrefix.setEnabled(true);
 		txtPrefix.setFont(new Font("SansSerif", Font.PLAIN, 12));
 		txtPrefix.setBounds(casePrefix.getLocation().x + casePrefix.getWidth() + 6, casePrefix.getLocation().y + 1,
 				grpDestination.getWidth() - (casePrefix.getLocation().x + casePrefix.getWidth()) - 18, 21);
@@ -4817,7 +4822,10 @@ public class Shutter {
 		txtExtension = new JTextField();
 		txtExtension.setName("txtExtension");
 		txtExtension.setColumns(10);
-		txtExtension.setEnabled(false);
+		// Default suffix, on by default
+		btnExtension.setSelected(true);
+		txtExtension.setText(DEFAULT_SUFFIX);
+		txtExtension.setEnabled(true);
 		txtExtension.setFont(new Font("SansSerif", Font.PLAIN, 12));
 		txtExtension.setBounds(btnExtension.getLocation().x + btnExtension.getWidth() + 6,
 				btnExtension.getLocation().y + 1,
@@ -5499,8 +5507,11 @@ public class Shutter {
 			@Override
 			public void actionPerformed(ActionEvent arg0) {
 
-				VideoPlayerCore.playerSetTime(VideoPlayerCore.playerCurrentFrame); // Use VideoPlayer.resizeAll and reload the
-																			// frame
+				if (VideoPlayerUI.fileDuration <= 40) {
+					VideoPlayerUtils.loadImage();
+				} else {
+					VideoPlayerCore.playerSetTime(VideoPlayerCore.playerCurrentFrame);
+				}
 			}
 
 		});
@@ -18816,7 +18827,11 @@ public class Shutter {
 					}
 
 					if (comboAccel.isVisible())
-						comboAccel.setSelectedIndex(0);
+					{
+						//Reset back to the automatic choice: the first detected GPU encoder, if any
+						LibraryUtils.userAccelChoice = null;
+						comboAccel.setSelectedIndex(comboAccel.getItemCount() > 1 ? 1 : 0);
+					}
 
 					caseForcerProgressif.setSelected(false);
 					caseForcerEntrelacement.setSelected(false);
@@ -19290,7 +19305,20 @@ public class Shutter {
 		comboAccel.setEditable(false);
 		comboAccel.setBounds(lblHWaccel.getLocation().x + lblHWaccel.getWidth() + 4, comboGPUDecoding.getY(), 115, 16);
 		statusBar.add(comboAccel);
-				
+
+		//Remember only choices made by the user, so automatic GPU selection never overrides them
+		comboAccel.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+			@Override
+			public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {
+				if (comboAccel.getSelectedItem() != null)
+					LibraryUtils.userAccelChoice = comboAccel.getSelectedItem().toString();
+			}
+			@Override
+			public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e) {}
+			@Override
+			public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {}
+		});
+
 		comboAccel.addActionListener(new ActionListener() {
 
 			@Override

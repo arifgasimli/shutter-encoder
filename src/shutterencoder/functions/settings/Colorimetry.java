@@ -69,7 +69,7 @@ public class Colorimetry extends Shutter {
 			String input = comboInLevels.getSelectedItem().toString().replace("16-235", "limited").replace("0-255", "full");
 			String output = comboOutLevels.getSelectedItem().toString().replace("16-235", "limited").replace("0-255", "full");
 			
-			if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+			if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 			{
 				filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "range=" + output);
 			}
@@ -100,7 +100,7 @@ public class Colorimetry extends Shutter {
 				pathToLuts = pathToLuts.substring(0,(int) (pathToLuts.lastIndexOf("/"))).replace("%20", "\\ ")  + "/LUTs/";
 			}
 			
-			if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+			if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 			{				
 				filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "lut=" + pathToLuts + Shutter.comboLUTs.getSelectedItem().toString() + ":peak_detect=0");	
 			}
@@ -121,7 +121,7 @@ public class Colorimetry extends Shutter {
 		{
 			if (comboInColormatrix.getSelectedItem().equals("HDR"))
 			{	
-				if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+				if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 				{
 					filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "tonemapping=hable:colorspace=bt709:color_primaries=bt709:color_trc=bt709");
 				}
@@ -150,7 +150,7 @@ public class Colorimetry extends Shutter {
 							break;
 					}
 					
-					if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+					if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 					{
 					    filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "range=full:color_trc=" + transfer);
 					}
@@ -168,7 +168,7 @@ public class Colorimetry extends Shutter {
 					String input = comboInColormatrix.getSelectedItem().toString().replace("Rec. ", "bt").replace("bt601", "smpte170m");
 					String output = comboOutColormatrix.getSelectedItem().toString().replace("Rec. ", "bt").replace("bt601", "smpte170m");
 					
-					if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+					if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 					{
 					    filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, getLibplaceboColorspaces(comboOutColormatrix.getSelectedItem().toString()));
 					}

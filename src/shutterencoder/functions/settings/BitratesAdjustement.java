@@ -77,7 +77,7 @@ public class BitratesAdjustement extends Shutter {
 			int cropX = Math.round((float)Integer.parseInt(Shutter.textCropPosX.getText()) / imageRatio);
 			int cropY = Math.round((float)Integer.parseInt(Shutter.textCropPosY.getText()) / imageRatio);
 
-			if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+			if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 			{
 				String crop_x = "crop_x=" + cropX;
 				if (caseMiror.isSelected() && caseRotate.isSelected() == false

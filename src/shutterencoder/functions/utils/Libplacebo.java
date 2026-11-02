@@ -29,7 +29,8 @@ import shutterencoder.ui.main.Shutter;
 
 public class Libplacebo extends Shutter {
 
-	public static boolean useLibplaceboFilters = false;
+	// Preview and export construct filters concurrently. Backend choices belong to the builder thread.
+	public static final ThreadLocal<Boolean> useLibplaceboFilters = ThreadLocal.withInitial(() -> false);
 	
 	public static String getSetParamsInput(boolean deinterlace, String filterComplex)
 	{		
@@ -106,15 +107,15 @@ public class Libplacebo extends Shutter {
 				
 		if (noGPU || LibraryUtils.libplaceboAvailable == false)
 		{
-			Libplacebo.useLibplaceboFilters = false;			
+			Libplacebo.useLibplaceboFilters.set(false);
 			return;
 		}
 		
-		Libplacebo.useLibplaceboFilters = true; //Allows to get the output from filters
+		Libplacebo.useLibplaceboFilters.set(true); //Allows to get the output from filters
 		
 		if (LibraryUtils.vulkanAvailable)
 		{
-			//Do not get the score just return Libplacebo.useLibplaceboFilters = true
+			// Vulkan is available; keep libplacebo enabled for this builder.
 			return;
 		}
 		
@@ -270,10 +271,10 @@ public class Libplacebo extends Shutter {
 	
 		if (score >= 3)
 		{
-			Libplacebo.useLibplaceboFilters = true;
+			Libplacebo.useLibplaceboFilters.set(true);
 		}
 		else
-			Libplacebo.useLibplaceboFilters = false;
+			Libplacebo.useLibplaceboFilters.set(false);
 	}
 
 	public static boolean checkLibplaceboFilter(String filterComplex) {

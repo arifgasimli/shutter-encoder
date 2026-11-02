@@ -25,11 +25,15 @@ import java.awt.Dimension;
 import java.awt.Image;
 import java.awt.Toolkit;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferByte;
+import java.awt.image.DataBufferUShort;
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -40,6 +44,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.imageio.ImageIO;
 import javax.swing.ImageIcon;
@@ -85,7 +90,12 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	public static byte[] preview = null;
 	public static Thread loadImageThread = new Thread();
 	private static volatile boolean loadImagePending = false;
+	private static final AtomicLong previewRevision = new AtomicLong();
 	public static Process processLoadImage;
+
+	public static void invalidatePreview() {
+		previewRevision.incrementAndGet();
+	}
 	
 	public static void setMedia() {
 
@@ -807,6 +817,10 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	}
 
 	public static void setFileList() {
+        if (!SwingUtilities.isEventDispatchThread()) {
+            SwingUtilities.invokeLater(VideoPlayerUtils::setFileList);
+            return;
+        }
 		
 		try {
 			
@@ -916,7 +930,7 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 
 	public static void updateTimeIn() {
 	
-		setMarkers();
+
 		
 		playerCurrentFrame = (Integer.parseInt(caseInH.getText()) * 3600 + Integer.parseInt(caseInM.getText()) * 60 + Integer.parseInt(caseInS.getText())) * getFPS() + Integer.parseInt(caseInF.getText());
 	
@@ -924,21 +938,13 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 		playerCurrentFrame = Timecode.getNTSCtimecode(playerCurrentFrame);
 		playerCurrentFrame = Timecode.getDropFrameTimecode(playerCurrentFrame);
 		
-		if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false && activeSegmentIndex != -1)
-		{
-			for (CutSegment seg : VideoPlayerMultiCuts.cutSegments) 
-		    {
-				if (seg.index == activeSegmentIndex)
-				{
-					seg.inH = Integer.parseInt(caseInH.getText());
-					seg.inM = Integer.parseInt(caseInM.getText());
-					seg.inS = Integer.parseInt(caseInS.getText());
-					seg.inF = Integer.parseInt(caseInF.getText());
-					break;
-				}
-			}
-		}
-		
+        if (!setBoundary(activeSegmentIndex, true, playerCurrentFrame)) return;
+        playerCurrentFrame = VideoPlayerMultiCuts.getSegmentTime(
+                Integer.parseInt(caseInH.getText()),
+                Integer.parseInt(caseInM.getText()),
+                Integer.parseInt(caseInS.getText()),
+                Integer.parseInt(caseInF.getText()));
+
 		playerSetTime(playerCurrentFrame);
 	
 		//FileList
@@ -947,17 +953,8 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 
 	public static void updateGrpOut(double timeOut) {
 		
-		if (playerMarkOut <= waveformContainer.getWidth())
-		{
-			//NTSC framerate
-			timeOut = Timecode.setNTSCtimecode(timeOut);
-		}	
-		else
-		{
-			//NTSC framerate
-			timeOut = Timecode.setNTSCtimecode(totalFrames);
-		}
-		 		
+        timeOut = Timecode.setNTSCtimecode(Math.max(0, Math.min(totalFrames, timeOut)));
+
 		if (Timecode.isDropFrame())
 		{
 			timeOut = Timecode.setDropFrameTimecode(timeOut);
@@ -971,7 +968,7 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 
 	public static void updateTimeOut() {
 			
-		setMarkers();		
+
 		
 		playerCurrentFrame = (Integer.parseInt(caseOutH.getText()) * 3600 + Integer.parseInt(caseOutM.getText()) * 60 + Integer.parseInt(caseOutS.getText())) * getFPS() + Integer.parseInt(caseOutF.getText()) - 1;
 	
@@ -979,28 +976,84 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 		playerCurrentFrame = Timecode.getNTSCtimecode(playerCurrentFrame);
 		playerCurrentFrame = Timecode.getDropFrameTimecode(playerCurrentFrame);
 	
-		if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false && activeSegmentIndex != -1)
-		{
-			for (CutSegment seg : VideoPlayerMultiCuts.cutSegments) 
-		    {
-				if (seg.index == activeSegmentIndex)
-				{
-					seg.outH = Integer.parseInt(caseOutH.getText());
-					seg.outM = Integer.parseInt(caseOutM.getText());
-					seg.outS = Integer.parseInt(caseOutS.getText());
-					seg.outF = Integer.parseInt(caseOutF.getText());
-					break;
-				}
-			}
-		}
-	
+        if (!setBoundary(activeSegmentIndex, false, playerCurrentFrame + 1)) return;
+        playerCurrentFrame = VideoPlayerMultiCuts.getSegmentTime(
+                Integer.parseInt(caseOutH.getText()),
+                Integer.parseInt(caseOutM.getText()),
+                Integer.parseInt(caseOutS.getText()),
+                Integer.parseInt(caseOutF.getText())) - 1;
+
 		playerSetTime(playerCurrentFrame);
 	
 		//FileList
 		setFileList();
 	}
 
+	/** Commits a boundary from user input; decoding completion must never call this. */
+	public static boolean setBoundary(int index, boolean in, double requestedFrame) {
+		if (!SwingUtilities.isEventDispatchThread()) throw new IllegalStateException("Range edits require the EDT");
+		if (!Double.isFinite(requestedFrame) || totalFrames < 1) return false;
+		CutSegment segment = null;
+		double start, end, lower = 0, upper = totalFrames;
+		if (!VideoPlayerMultiCuts.cutSegments.isEmpty()) {
+			if (index < 0 || index >= VideoPlayerMultiCuts.cutSegments.size()) return false;
+			segment = VideoPlayerMultiCuts.cutSegments.get(index);
+			start = VideoPlayerMultiCuts.getSegmentTime(segment.inH, segment.inM, segment.inS, segment.inF);
+			end = VideoPlayerMultiCuts.getSegmentTime(segment.outH, segment.outM, segment.outS, segment.outF);
+			if (index > 0) {
+				CutSegment previous = VideoPlayerMultiCuts.cutSegments.get(index - 1);
+				lower = VideoPlayerMultiCuts.getSegmentTime(previous.outH, previous.outM, previous.outS, previous.outF);
+			}
+			if (index + 1 < VideoPlayerMultiCuts.cutSegments.size()) {
+				CutSegment next = VideoPlayerMultiCuts.cutSegments.get(index + 1);
+				upper = VideoPlayerMultiCuts.getSegmentTime(next.inH, next.inM, next.inS, next.inF);
+			}
+		} else {
+			start = VideoPlayerMultiCuts.getSegmentTime(Integer.parseInt(caseInH.getText()), Integer.parseInt(caseInM.getText()),
+					Integer.parseInt(caseInS.getText()), Integer.parseInt(caseInF.getText()));
+			end = VideoPlayerMultiCuts.getSegmentTime(Integer.parseInt(caseOutH.getText()), Integer.parseInt(caseOutM.getText()),
+					Integer.parseInt(caseOutS.getText()), Integer.parseInt(caseOutF.getText()));
+		}
+		double minimum = in ? lower : start + 1;
+		double maximum = in ? end - 1 : upper;
+		if (maximum < minimum) return false;
+		double frame = Math.max(Math.ceil(minimum), Math.min(Math.floor(maximum), Math.floor(requestedFrame)));
+		if (in) updateGrpIn(frame); else updateGrpOut(frame);
+		double candidate = VideoPlayerMultiCuts.getSegmentTime(
+				Integer.parseInt((in ? caseInH : caseOutH).getText()), Integer.parseInt((in ? caseInM : caseOutM).getText()),
+				Integer.parseInt((in ? caseInS : caseOutS).getText()), Integer.parseInt((in ? caseInF : caseOutF).getText()));
+		if (candidate < minimum || candidate > maximum) {
+			if (segment != null) displayRange(segment);
+			return false;
+		}
+		if (segment != null) {
+			// Restore the untouched boundary from the model, not from a decoded frame's UI state.
+			if (in) {
+				segment.inH = Integer.parseInt(caseInH.getText()); segment.inM = Integer.parseInt(caseInM.getText());
+				segment.inS = Integer.parseInt(caseInS.getText()); segment.inF = Integer.parseInt(caseInF.getText());
+			} else {
+				segment.outH = Integer.parseInt(caseOutH.getText()); segment.outM = Integer.parseInt(caseOutM.getText());
+				segment.outS = Integer.parseInt(caseOutS.getText()); segment.outF = Integer.parseInt(caseOutF.getText());
+			}
+			displayRange(segment);
+		}
+		setMarkers();
+		setFileList();
+		return true;
+	}
+
+	private static void displayRange(CutSegment segment) {
+		caseInH.setText(Shutter.formatter.format(segment.inH)); caseInM.setText(Shutter.formatter.format(segment.inM));
+		caseInS.setText(Shutter.formatter.format(segment.inS)); caseInF.setText(Shutter.formatter.format(segment.inF));
+		caseOutH.setText(Shutter.formatter.format(segment.outH)); caseOutM.setText(Shutter.formatter.format(segment.outM));
+		caseOutS.setText(Shutter.formatter.format(segment.outS)); caseOutF.setText(Shutter.formatter.format(segment.outF));
+	}
+
 	public static void setMarkers() {
+        if (!SwingUtilities.isEventDispatchThread()) {
+            SwingUtilities.invokeLater(VideoPlayerUtils::setMarkers);
+            return;
+        }
 			
 		try {
 			
@@ -1027,68 +1080,7 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 				}
 			}
 			
-			if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false)
-			{
-				double time = bufferCurrentFrame > 0 ? bufferCurrentFrame : playerCurrentFrame;
-				
-				CutSegment previousSegment = activeSegmentIndex > 0 ? VideoPlayerMultiCuts.cutSegments.get(activeSegmentIndex - 1) : null;
-				CutSegment activeSegment = VideoPlayerMultiCuts.cutSegments.get(activeSegmentIndex);				
-				CutSegment nextSegment = activeSegmentIndex < VideoPlayerMultiCuts.cutSegments.size() - 1 ? VideoPlayerMultiCuts.cutSegments.get(activeSegmentIndex + 1) : null;
-				
-				double segmentIn = VideoPlayerMultiCuts.getSegmentTime(activeSegment.inH, activeSegment.inM, activeSegment.inS, activeSegment.inF);
-	            double segmentOut = VideoPlayerMultiCuts.getSegmentTime(activeSegment.outH, activeSegment.outM, activeSegment.outS, activeSegment.outF);
-				
-				//Mark in
-				if (waveformContainer.getCursor().equals(Cursor.getPredefinedCursor(Cursor.W_RESIZE_CURSOR)))
-				{					
-					if (nextSegment != null && time > segmentOut) //Set the next segment index
-					{
-						nextSegment.inMark = playerMarkIn;
-						nextSegment.inH = Integer.parseInt(caseInH.getText());
-						nextSegment.inM = Integer.parseInt(caseInM.getText());
-						nextSegment.inS = Integer.parseInt(caseInS.getText());
-						nextSegment.inF = Integer.parseInt(caseInF.getText());				
-				        
-				        waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)); //Stop the dragging process
-					}
-					else if (dragSegmentIndex == activeSegmentIndex) //Only change values of the current segment
-					{
-						activeSegment.inMark = playerMarkIn;
-						activeSegment.inH = Integer.parseInt(caseInH.getText());
-						activeSegment.inM = Integer.parseInt(caseInM.getText());
-						activeSegment.inS = Integer.parseInt(caseInS.getText());
-						activeSegment.inF = Integer.parseInt(caseInF.getText());						
-					}
-					else
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)); //Stop the dragging process
-				}
-				
-				//Mark out
-				if (waveformContainer.getCursor().equals(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)))
-				{
-					if (previousSegment != null && time < segmentIn) //Set the next segment index
-					{
-						previousSegment.outMark = playerMarkOut;
-						previousSegment.outH = Integer.parseInt(caseOutH.getText());
-						previousSegment.outM = Integer.parseInt(caseOutM.getText());
-						previousSegment.outS = Integer.parseInt(caseOutS.getText());
-						previousSegment.outF = Integer.parseInt(caseOutF.getText());				
-				        
-				        waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)); //Stop the dragging process
-					}					
-					else if (dragSegmentIndex == activeSegmentIndex) //Only change values of the current segment
-					{
-						activeSegment.outMark = playerMarkOut;
-				        activeSegment.outH = Integer.parseInt(caseOutH.getText());
-				        activeSegment.outM = Integer.parseInt(caseOutM.getText());
-				        activeSegment.outS = Integer.parseInt(caseOutS.getText());
-				        activeSegment.outF = Integer.parseInt(caseOutF.getText());
-					} 
-					else
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR)); //Stop the dragging process
-				}		
-			}
-	
+
 			waveformContainer.repaint();
 			
 		} catch (Exception e) {
@@ -1108,7 +1100,12 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	    return containerWidth;
 	}
 
-	public static void getTimePoint(double inputTime) {	
+	public static void getTimePoint(double inputTime) {
+        if (!SwingUtilities.isEventDispatchThread()) {
+            final double requestedTime = inputTime;
+            SwingUtilities.invokeLater(() -> getTimePoint(requestedTime));
+            return;
+        }
 				
 		if (inputTime >= totalFrames)
 		{
@@ -1123,16 +1120,6 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 		
 		if (playerVideo != null && inputTime - offset < totalFrames)
 		{    	    		
-			if (waveformContainer.getCursor().equals(Cursor.getPredefinedCursor(Cursor.W_RESIZE_CURSOR)) && mouseIsPressed)
-			{
-				updateGrpIn(inputTime - offset);
-			}			
-			
-			if (waveformContainer.getCursor().equals(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)) && mouseIsPressed)
-			{
-				updateGrpOut(inputTime - offset + 1);
-			}
-			
 			//NTSC framerate
 			double time = Timecode.setNTSCtimecode(inputTime);
 			
@@ -1385,13 +1372,18 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	    }
 	}
 
-	public static void loadImage() {
+	public static synchronized void loadImage() {
+		if (!SwingUtilities.isEventDispatchThread()) {
+			SwingUtilities.invokeLater(VideoPlayerUtils::loadImage);
+			return;
+		}
 
 	    if (videoPath == null || Shutter.list.getSize() <= 0 || Shutter.doNotLoadImage)
 	    {
 	        return;
 	    }
 
+	    final long revision = previewRevision.incrementAndGet();
 	    //Stop player
 		if (playerIsPlaying())
 		{
@@ -1404,6 +1396,8 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 		}
 		
 		loadImagePending = false;
+		final String requestedPath = videoPath;
+		final SourcePreviewRequest sourceRequest = createSourcePreviewRequest();
 	
 	    loadImageThread = new Thread(() -> {
 		    	
@@ -1416,9 +1410,10 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 			
 	        try
 	        {		        		
-	        	File file = new File(videoPath);
+				File file = new File(requestedPath);
 	        			        						
-				String extension =  file.toString().substring(file.toString().lastIndexOf("."));	
+				String name = file.getName();
+				String extension = name.contains(".") ? name.substring(name.lastIndexOf('.')) : "";
 				boolean isRaw = false;
 				
 				//FFprobe with RAW files
@@ -1473,6 +1468,15 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 				
 				if (fileDuration <= 40 || Shutter.caseEnableSequence.isSelected()) //Image
 					inputPoint = "";
+
+				// Decode ordinary media from the source in one pass. A scaled raw-frame
+				// cache loses source geometry and can be repopulated by an obsolete request.
+				if (!isRaw && !extension.equalsIgnoreCase(".pdf")
+						&& !Shutter.comboResolution.getSelectedItem().toString().contains("AI"))
+				{
+					generateSourcePreview(sourceRequest, revision);
+					return;
+				}
 		
 				//Creating preview file													
 				String cmd = deinterlace + " -frames:v 1 -an -sn -s " + playerWidth + "x" + playerHeight + " -scaler bicubic -y ";	
@@ -1592,16 +1596,79 @@ public class VideoPlayerUtils extends VideoPlayerCore {
   				else
 					Shutter.btnStart.setText(Shutter.language.getProperty("btnStartFunction"));
 	  			
-	  			if (loadImagePending)
-	  			{	  				
-	  		        loadImagePending = false;
-	  		        SwingUtilities.invokeLater(() -> loadImage());
-	  		    }
+				synchronized (VideoPlayerUtils.class) {
+					// Clear the running marker before queuing another refresh. Otherwise
+					// the EDT can see this finishing thread as alive and lose the refresh.
+					loadImageThread = new Thread();
+					if (loadImagePending) {
+						loadImagePending = false;
+						SwingUtilities.invokeLater(() -> loadImage());
+					}
+				}
 	        }
 	
 	    });
 	
 	    loadImageThread.start();
+	}
+
+	private record SourcePreviewRequest(String path, String command, int width, int height, boolean alpha) {}
+
+	private static SourcePreviewRequest createSourcePreviewRequest() {
+		String name = new File(videoPath).getName();
+		String extension = name.contains(".") ? name.substring(name.lastIndexOf('.')).toLowerCase() : "";
+		if (extension.matches("\\.(3fr|arw|crw|cr2|cr3|dng|kdc|mrw|nef|nrw|orf|ptx|pef|raf|r3d|rw2|srw|x3f|pdf)")
+				|| Shutter.comboResolution.getSelectedItem().toString().contains("AI")) return null;
+		preview = null;
+		String seek = fileDuration <= 40 || Shutter.caseEnableSequence.isSelected() ? ""
+				: " -ss " + (long) (playerCurrentFrame * inputFramerateMS) + "ms";
+		String command = Colorimetry.setInputCodec(extension) + " -v error -hide_banner" + seek
+				+ " -i \"" + videoPath + "\"" + setFilter(true, false, true)
+				+ " -frames:v 1 -c:v rawvideo -pix_fmt " + (FFPROBE.hasAlpha ? "abgr" : "rgb565le")
+				+ " -an -sn -f rawvideo -";
+		return new SourcePreviewRequest(videoPath, command, player.getWidth(), player.getHeight(), FFPROBE.hasAlpha);
+	}
+
+	private static void generateSourcePreview(SourcePreviewRequest request, long revision) throws Exception {
+		if (request == null || request.width <= 0 || request.height <= 0
+				|| (revision != previewRevision.get() && frameVideo != null)) return;
+		Process process = new ProcessBuilder(formatCommand(request.command))
+				.redirectError(ProcessBuilder.Redirect.DISCARD).start();
+		processLoadImage = process;
+		try {
+			process.getOutputStream().close();
+			int size = Math.multiplyExact(Math.multiplyExact(request.width, request.height), request.alpha ? 4 : 2);
+			byte[] pixels;
+			try (InputStream input = process.getInputStream()) {
+				pixels = input.readNBytes(size);
+			}
+			if (!process.waitFor(5, TimeUnit.SECONDS) || process.exitValue() != 0 || pixels.length != size) return;
+			BufferedImage image = decodePreviewFrame(pixels, request.width, request.height, request.alpha);
+			SwingUtilities.invokeLater(() -> {
+				// A superseded frame is still better than a black player when nothing else is shown
+				if ((revision == previewRevision.get() || frameVideo == null) && request.path.equals(videoPath)
+						&& request.width == player.getWidth() && request.height == player.getHeight()) {
+					frameVideo = image;
+					player.repaint();
+				}
+			});
+		} finally {
+			if (process.isAlive()) process.destroyForcibly();
+		}
+	}
+
+	public static BufferedImage decodePreviewFrame(byte[] pixels, int width, int height, boolean alpha) {
+		int expected = Math.multiplyExact(Math.multiplyExact(width, height), alpha ? 4 : 2);
+		if (pixels.length != expected) throw new IllegalArgumentException("Incomplete preview frame");
+		BufferedImage image = new BufferedImage(width, height,
+				alpha ? BufferedImage.TYPE_4BYTE_ABGR : BufferedImage.TYPE_USHORT_565_RGB);
+		if (alpha) {
+			System.arraycopy(pixels, 0, ((DataBufferByte) image.getRaster().getDataBuffer()).getData(), 0, expected);
+		} else {
+			short[] data = ((DataBufferUShort) image.getRaster().getDataBuffer()).getData();
+			ByteBuffer.wrap(pixels).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(data);
+		}
+		return image;
 	}
 	
 	public static void restartPlayback() {
@@ -1698,7 +1765,9 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	    //Format gpu
   		String bitDepth = FFPROBE.imageDepth == 10 ? "p010" : "nv12";
 
-	    thumbnailExecutor = Executors.newFixedThreadPool(numThreads);
+	    final ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+	    thumbnailExecutor = executor;
+	    final String thumbnailPath = videoPath;
 
 	    thumbnailThread = new Thread(() -> {
 	        double totalSeconds = fileDuration / 1000.0;
@@ -1718,7 +1787,7 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	        {
 	            final int index = i;
 	            
-	            Future<?> future = thumbnailExecutor.submit(() -> {
+	            Future<?> future = executor.submit(() -> {
 	            	
 	                if (Thread.currentThread().isInterrupted())
 	                    return;
@@ -1770,7 +1839,7 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	        		command.add("-ss");
 	        		command.add(formattedSeek);
 	        		command.add("-i");
-	        		command.add(videoPath);
+	        		command.add(thumbnailPath);
 	        		command.add("-vf");
 	        		command.add(scaling + crop);
 	        		command.add("-analyzeduration");
@@ -1798,7 +1867,8 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	                    }
 	                    	                    
 	                    int exitCode = process.waitFor();
-	                    if (exitCode == 0 && img != null) {
+	                    //A cancelled generation must not overwrite the thumbnails of the next file
+	                    if (exitCode == 0 && img != null && executor == thumbnailExecutor && !executor.isShutdown()) {
 	                        images[index] = img;
 	                        allThumbnails = images;
 	                        
@@ -1830,7 +1900,7 @@ public class VideoPlayerUtils extends VideoPlayerCore {
 	            }
 	        }
 	        
-	        thumbnailExecutor.shutdownNow();
+	        executor.shutdownNow();
 	    });
 
 	    thumbnailThread.start();

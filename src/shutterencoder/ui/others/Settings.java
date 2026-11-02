@@ -1584,24 +1584,16 @@ public class Settings {
 						//casePrefix
 						if (eElement.getElementsByTagName("Name").item(0).getFirstChild().getTextContent().equals("casePrefix"))
 						{
-							if (Boolean.valueOf(eElement.getElementsByTagName("Value").item(0).getFirstChild().getTextContent()) == true)
-							{
-								Shutter.casePrefix.setSelected(true);
-								Shutter.txtPrefix.setEnabled(true);
-							}
-							else
-								Shutter.casePrefix.setSelected(false);
+							//The prefix is predefined and always on: ignore the saved state
+							Shutter.casePrefix.setSelected(true);
+							Shutter.txtPrefix.setEnabled(true);
 						}
-						
+
 						//Prefix
 						if (eElement.getElementsByTagName("Name").item(0).getFirstChild().getTextContent().equals("txtPrefix"))
 						{
-							if (eElement.getElementsByTagName("Value").item(0).getFirstChild() != null)
-							{
-								Shutter.txtPrefix.setText(eElement.getElementsByTagName("Value").item(0).getFirstChild().getTextContent());
-							}
-							else
-								Shutter.txtPrefix.setText("");
+							//The prefix is predefined: ignore the saved value
+							Shutter.txtPrefix.setText(Shutter.DEFAULT_PREFIX);
 						}
 						
 						//btnExtension
@@ -1621,12 +1613,16 @@ public class Settings {
 						{
 							if (eElement.getElementsByTagName("Value").item(0).getFirstChild() != null)
 							{
-								Shutter.txtExtension.setText(eElement.getElementsByTagName("Value").item(0).getFirstChild().getTextContent());
+								String savedSuffix = eElement.getElementsByTagName("Value").item(0).getFirstChild().getTextContent();
+								//Migrate the previous default suffix to the current one
+								if (savedSuffix.equals("_H.264{height}_{width}_{fps}"))
+									savedSuffix = Shutter.DEFAULT_SUFFIX;
+								Shutter.txtExtension.setText(savedSuffix);
 							}
 							else
 								Shutter.txtExtension.setText("");
 						}
-						
+
 						//caseSubFolder
 						if (eElement.getElementsByTagName("Name").item(0).getFirstChild().getTextContent().equals("caseSubFolder"))
 						{

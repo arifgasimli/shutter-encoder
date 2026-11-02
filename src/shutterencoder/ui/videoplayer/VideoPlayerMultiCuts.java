@@ -265,7 +265,10 @@ public class VideoPlayerMultiCuts extends VideoPlayerCore {
 	        }
 	        
 	        //Sort in correct index position
-	        cutSegments.sort((s1, s2) -> Integer.compare(s1.inMark, s2.inMark));
+	        cutSegments.sort((s1, s2) -> Double.compare(
+                getSegmentTime(s1.inH, s1.inM, s1.inS, s1.inF),
+                getSegmentTime(s2.inH, s2.inM, s2.inS, s2.inF)));
+        for (int i = 0; i < cutSegments.size(); i++) cutSegments.get(i).index = i;
 	        
 	        updateCurrentSegment();
 		}
@@ -342,6 +345,12 @@ public class VideoPlayerMultiCuts extends VideoPlayerCore {
 	}
 	
 	public static void setCurrentSegmentValues() {
+        if (!javax.swing.SwingUtilities.isEventDispatchThread()) {
+            javax.swing.SwingUtilities.invokeLater(VideoPlayerMultiCuts::setCurrentSegmentValues);
+            return;
+        }
+        if (boundaryDragInProgress) return;
+
 
 		for (CutSegment seg : cutSegments)
         {
@@ -429,6 +438,12 @@ public class VideoPlayerMultiCuts extends VideoPlayerCore {
 	}
 	
 	public static void updateCurrentSegment() {
+        if (!javax.swing.SwingUtilities.isEventDispatchThread()) {
+            javax.swing.SwingUtilities.invokeLater(VideoPlayerMultiCuts::updateCurrentSegment);
+            return;
+        }
+        if (boundaryDragInProgress || (setTime != null && setTime.isAlive())) return;
+
 		
 		//Set activeSegmentIndex
         if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false)

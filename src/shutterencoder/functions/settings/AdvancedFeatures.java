@@ -108,7 +108,7 @@ public class AdvancedFeatures extends Shutter {
 				}
 				
 			}
-			else if (Libplacebo.useLibplaceboFilters
+			else if (Libplacebo.useLibplaceboFilters.get()
 			&& comboGPUFilter.getSelectedItem().toString().equals(language.getProperty("aucun")) == false && noGPU == false && doubler == 0
 			&& (caseForcerDesentrelacement.isSelected() == false || comboForcerDesentrelacement.getSelectedItem().toString().equals("bwdif") || comboForcerDesentrelacement.getSelectedItem().toString().equals("yadif")))
 			{
@@ -683,7 +683,7 @@ public class AdvancedFeatures extends Shutter {
 			
 			if (FPS != newFPS)
 			{	           
-				if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+				if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 				{
 					filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "fps=" + newFPS + ":frame_mixer=linear");
 				}

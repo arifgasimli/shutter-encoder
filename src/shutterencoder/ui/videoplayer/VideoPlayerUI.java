@@ -112,6 +112,31 @@ public class VideoPlayerUI {
     public static JComboBox<Object> comboPlayerQuality = new JComboBox<Object>(new String [] {"1:1", "1:2", "1:4", "auto"});
     static JLabel showFPS;
     public static JComboBox<String> comboAudioTrack;
+    public static volatile boolean boundaryDragInProgress;
+    private static javax.swing.Timer waveformSeekTimer;
+    private static double waveformSeekFrame = Double.NaN;
+
+    private static double waveformCursorFrame() {
+        return Math.floor(totalFrames * cursorWaveform.getX() / Math.max(1.0, waveformContainer.getWidth()));
+    }
+
+    public static int boundaryCursorAt(int x, int in, int out) {
+        boolean nearIn = Math.abs((long) x - in) <= 5;
+        boolean nearOut = Math.abs((long) x - out) <= 5;
+        if (nearIn && nearOut) return x < ((double) in + out) / 2
+                ? Cursor.W_RESIZE_CURSOR : Cursor.E_RESIZE_CURSOR;
+        if (nearIn) return Cursor.W_RESIZE_CURSOR;
+        if (nearOut) return Cursor.E_RESIZE_CURSOR;
+        return Cursor.DEFAULT_CURSOR;
+    }
+
+    private static void updateDraggedBoundary() {
+        if (!boundaryDragInProgress) return;
+        boolean in = waveformContainer.getCursor().getType() == Cursor.W_RESIZE_CURSOR;
+        VideoPlayerUtils.setBoundary(VideoPlayerCore.dragSegmentIndex, in,
+                waveformCursorFrame() + (in ? 0 : 1));
+    }
+
     public static int playerMarkIn = 0;
     public static int playerMarkOut = 0;    
     public static double screenRefreshRate = 16.7; //Vsync in ms	
@@ -1399,27 +1424,10 @@ public class VideoPlayerUI {
 					if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false)
 						VideoPlayerMultiCuts.saveCutState();
 					
-					if (VideoPlayerCore.bufferCurrentFrame > 0)
-					{
-						VideoPlayerUtils.updateGrpIn(VideoPlayerCore.bufferCurrentFrame);		
-					}
-					else
-						VideoPlayerUtils.updateGrpIn(VideoPlayerCore.playerCurrentFrame);
-					
-					if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false) //Trigger the correct marker inside setMarkers()
-					{
-						VideoPlayerCore.dragSegmentIndex = VideoPlayerCore.activeSegmentIndex;
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.W_RESIZE_CURSOR));
-					}
-						
-					VideoPlayerUtils.setMarkers();
-					
-					if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false) //Back to default
-					{
-						VideoPlayerCore.dragSegmentIndex = -1;
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-					}
-					
+                    double frame = VideoPlayerCore.bufferCurrentFrame > 0
+                            ? VideoPlayerCore.bufferCurrentFrame : VideoPlayerCore.playerCurrentFrame;
+                    VideoPlayerUtils.setBoundary(VideoPlayerCore.activeSegmentIndex, true, frame);
+
 					Shutter.timecode.repaint();
 					
 					//FileList
@@ -1527,27 +1535,10 @@ public class VideoPlayerUI {
 					if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false)
 						VideoPlayerMultiCuts.saveCutState();
 					
-					if (VideoPlayerCore.bufferCurrentFrame > 0)
-					{
-						VideoPlayerUtils.updateGrpOut(VideoPlayerCore.bufferCurrentFrame + 1);		
-					}
-					else
-						VideoPlayerUtils.updateGrpOut(VideoPlayerCore.playerCurrentFrame + 1);	
-					
-					if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false) //Trigger the correct marker inside setMarkers()
-					{
-						VideoPlayerCore.dragSegmentIndex = VideoPlayerCore.activeSegmentIndex;
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR));
-					}
-						
-					VideoPlayerUtils.setMarkers();
-					
-					if (VideoPlayerMultiCuts.cutSegments.isEmpty() == false) //Back to default
-					{
-						VideoPlayerCore.dragSegmentIndex = -1;
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-					}
-					
+                    double frame = VideoPlayerCore.bufferCurrentFrame > 0
+                            ? VideoPlayerCore.bufferCurrentFrame : VideoPlayerCore.playerCurrentFrame;
+                    VideoPlayerUtils.setBoundary(VideoPlayerCore.activeSegmentIndex, false, frame + 1);
+
 					Shutter.timecode.repaint();
 
 					//FileList
@@ -2550,139 +2541,22 @@ public class VideoPlayerUI {
 					
 					cursorHead.setLocation(cursorWaveform.getX() - 5, cursorWaveform.getY());
 					
-					//Allows to setTime to the last mousePosition
-					Thread t = new Thread(new Runnable() {
-						
-						@Override
-						public void run() {
-							
-							while (mouseIsPressed)
-							{
-								//Slow down the loop
-								try {
-									Thread.sleep(1);
-								} catch (InterruptedException e) {}
-								
-								double inputTime = VideoPlayerCore.bufferCurrentFrame > 0 ? VideoPlayerCore.bufferCurrentFrame - 1: VideoPlayerCore.playerCurrentFrame;
-								double value = (double) totalFrames * cursorWaveform.getLocation().x / waveformContainer.getSize().width;
-									
-								if (inputTime != Math.floor(value))
-								{
-									if (VideoPlayerCore.bufferIsReadingFrames)
-									{
-										VideoPlayerCore.bufferIsReadingFrames = false;
-										
-										VideoPlayerCore.playerStop();
-										try {
-											VideoPlayerCore.playerThread.join();
-										} catch (InterruptedException e) {
-										    Thread.currentThread().interrupt();
-										}
-										
-										//Wait setTime thread to finish	
-										if (VideoPlayerCore.setTime != null)
-										{
-											try {
-												VideoPlayerCore.setTime.join();
-											} catch (InterruptedException ex) {
-												ex.printStackTrace();
-												Thread.currentThread().interrupt();
-											}
-										}
-									}
-									
-									//NTSC framerate
-									value = Timecode.getNTSCtimecode(value);
-									
-									VideoPlayerCore.playerSetTime(value);
-																								
-									//Wait setTime thread to finish	
-									if (VideoPlayerCore.setTime != null)
-									{
-										try {
-											VideoPlayerCore.setTime.join();
-										} catch (InterruptedException ex) {
-											ex.printStackTrace();
-											Thread.currentThread().interrupt();
-										}
-									}
-									
-									//When changing segment while dragging									
-									if (VideoPlayerCore.dragSegmentIndex != -1
-									&& VideoPlayerCore.dragSegmentIndex != VideoPlayerCore.activeSegmentIndex)
-									{
-										int index = VideoPlayerCore.dragSegmentIndex;
-										VideoPlayerMultiCuts.CutSegment seg = VideoPlayerMultiCuts.cutSegments.get(index);
-										
-										if (waveformContainer.getCursor().equals(Cursor.getPredefinedCursor(Cursor.W_RESIZE_CURSOR)))
-										{
-											//Get the previous segment out
-											if (VideoPlayerCore.dragSegmentIndex > 0)
-											{
-												seg.inMark = VideoPlayerMultiCuts.cutSegments.get(index - 1).outMark;
-												seg.inH = VideoPlayerMultiCuts.cutSegments.get(index - 1).outH;
-												seg.inM = VideoPlayerMultiCuts.cutSegments.get(index - 1).outM;
-												seg.inS = VideoPlayerMultiCuts.cutSegments.get(index - 1).outS;
-												seg.inF = VideoPlayerMultiCuts.cutSegments.get(index - 1).outF;
-											}
-											else //Set all values to 0
-											{
-												seg.inMark = 0;
-												seg.inH = 0;
-												seg.inM = 0;
-												seg.inS = 0;
-												seg.inF = 0;
-											}
-										}
-										else if (waveformContainer.getCursor().equals(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)))
-										{	
-											//Get the next segment in
-											if (VideoPlayerCore.dragSegmentIndex < VideoPlayerMultiCuts.cutSegments.size() - 1)
-											{
-												seg.outMark = VideoPlayerMultiCuts.cutSegments.get(index + 1).inMark;
-												seg.outH = VideoPlayerMultiCuts.cutSegments.get(index + 1).inH;
-												seg.outM = VideoPlayerMultiCuts.cutSegments.get(index + 1).inM;
-												seg.outS = VideoPlayerMultiCuts.cutSegments.get(index + 1).inS;
-												seg.outF = VideoPlayerMultiCuts.cutSegments.get(index + 1).inF;
-											}
-											else //Set all values to waveformContainer width
-											{
-												seg.outMark = waveformContainer.getWidth();
-											}
-										}
-										
-										//Allows to stop dragging when changing activeSegmentIndex value
-										waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-									}
-									
-									VideoPlayerCore.dragSegmentIndex = VideoPlayerCore.activeSegmentIndex;
-									
-									double time = VideoPlayerCore.bufferCurrentFrame > 0 ? VideoPlayerCore.bufferCurrentFrame : VideoPlayerCore.playerCurrentFrame;
-									
-									//Set markers, sliderChange check is to make sure to not change in/out if mouse has been released
-									if (waveformContainer.getCursor().equals(Cursor.getPredefinedCursor(Cursor.W_RESIZE_CURSOR)) && sliderChange)
-									{
-										if (cursorWaveform.getX() < playerMarkOut)
-										{
-											VideoPlayerUtils.updateGrpIn(time);
-											
-											VideoPlayerUtils.setMarkers();
-										}
-									}
-									else if (waveformContainer.getCursor().equals(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR)) && sliderChange)
-									{
-										if (cursorWaveform.getX() > playerMarkIn)
-										{
-											VideoPlayerUtils.updateGrpOut(time + 1);
-											
-											VideoPlayerUtils.setMarkers();
-										}
-									}
-								}
-							}
-						}				
-					});
-					t.start();
+                    boundaryDragInProgress = waveformContainer.getCursor().getType() == Cursor.W_RESIZE_CURSOR
+                            || waveformContainer.getCursor().getType() == Cursor.E_RESIZE_CURSOR;
+                    VideoPlayerCore.dragSegmentIndex = boundaryDragInProgress ? VideoPlayerCore.activeSegmentIndex : -1;
+                    updateDraggedBoundary();
+                    if (waveformSeekTimer != null) waveformSeekTimer.stop();
+                    waveformSeekFrame = Double.NaN;
+                    waveformSeekTimer = new javax.swing.Timer(30, event -> {
+                        if (!mouseIsPressed) return;
+                        double frame = Math.min(totalFrames - 1, waveformCursorFrame());
+                        if (frame != waveformSeekFrame) {
+                            waveformSeekFrame = frame;
+                            VideoPlayerCore.playerSetTime(frame);
+                        }
+                    });
+                    waveformSeekTimer.start();
+
                 }
 			}
 
@@ -2694,61 +2568,21 @@ public class VideoPlayerUI {
 		            waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
 		        }
 				
+                if (!SwingUtilities.isLeftMouseButton(e)) return;
 				if (Shutter.list.getSize() > 0)
                 {						
+                    updateDraggedBoundary();
+                    if (waveformSeekTimer != null) waveformSeekTimer.stop();
+                    boundaryDragInProgress = false;
+                    VideoPlayerCore.dragSegmentIndex = -1;
+                    mouseIsPressed = false;
+                    final double releasedFrame = Math.min(totalFrames - 1, waveformCursorFrame());
 					sliderChange = false;
 					
-					Thread t = new Thread(new Runnable() {
-						
-						@Override
-						public void run() {
-
-							//Wait setTime thread to finish	
-							if (VideoPlayerCore.setTime != null)
-							{
-								try {
-									VideoPlayerCore.setTime.join();
-								} catch (InterruptedException ex) {
-									ex.printStackTrace();
-									Thread.currentThread().interrupt();
-								}
-							}
-							
-							mouseIsPressed = false;
-							
-							//Reload the frame to apply bicubic filter			
-							VideoPlayerCore.playerSetTime(VideoPlayerCore.playerCurrentFrame);	
-							
-							//Wait setTime thread to finish	
-							if (VideoPlayerCore.setTime != null)
-							{
-								try {
-									VideoPlayerCore.setTime.join();
-								} catch (InterruptedException ex) {
-									ex.printStackTrace();
-									Thread.currentThread().interrupt();
-								}
-							}
-							
-							if (VideoPlayerCore.playerIsPlaying())
-							{
-								VideoPlayerCore.playerLoop = true;
-							}
-							else
-								VideoPlayerCore.playerLoop = false;
-												
-							waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-							
-							double time = VideoPlayerCore.bufferCurrentFrame > 0 ? VideoPlayerCore.bufferCurrentFrame : VideoPlayerCore.playerCurrentFrame;
-							setBtnEdit(time);
-							
-							//FileList
-							VideoPlayerUtils.setFileList();
-							
-							VideoPlayerCore.dragSegmentIndex = -1;
-						}				
-					});
-					t.start();
+                    waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
+                    VideoPlayerCore.playerSetTime(releasedFrame);
+                    setBtnEdit(releasedFrame);
+                    VideoPlayerUtils.setFileList();
                 }								
 			}
 			
@@ -2812,6 +2646,7 @@ public class VideoPlayerUI {
 					}
 					
 					cursorHead.setLocation(cursorWaveform.getX() - 5, cursorWaveform.getY());										
+                    updateDraggedBoundary();
                 }
 			}
 
@@ -2823,16 +2658,7 @@ public class VideoPlayerUI {
 				
 				if (caseApplyCutToAll.isVisible() == false || caseApplyCutToAll.isSelected() == false)
 				{
-					if (e.getX() >= playerMarkIn - 5 && e.getX() <= playerMarkIn + 5)
-					{
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.W_RESIZE_CURSOR));						
-					}
-					else if (e.getX() >= playerMarkOut - 5 && e.getX() <= playerMarkOut + 5)
-					{
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.E_RESIZE_CURSOR));
-					}
-					else
-						waveformContainer.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
+					waveformContainer.setCursor(Cursor.getPredefinedCursor(boundaryCursorAt(e.getX(), playerMarkIn, playerMarkOut)));
 				}
 			}
 		
@@ -4090,6 +3916,11 @@ public class VideoPlayerUI {
 			{
 				String s[] = Shutter.comboResolution.getSelectedItem().toString().split("x");		
 				ratio = (double) Integer.parseInt(s[0]) / Integer.parseInt(s[1]);
+				if (Shutter.caseRotate.isSelected()
+						&& (Shutter.comboRotate.getSelectedIndex() == 1 || Shutter.comboRotate.getSelectedIndex() == 2)
+						&& shutterencoder.functions.VideoEncoders.setScalingFirst()) {
+					ratio = 1.0 / ratio;
+				}
 			}
 			else if (Shutter.caseEnableCrop.isSelected() && isPiping)
 			{			

@@ -5,7 +5,7 @@ try {
     $taskFFmpeg = (Get-Command $FFmpeg -ErrorAction Stop).Source
     New-Item -ItemType Directory -Force .codex-build/classes | Out-Null
     $taskSources = @(Get-ChildItem src -Recurse -Filter *.java | ForEach-Object { $_.FullName })
-    $taskSources += (Resolve-Path tests/RegressionTests.java).Path
+    $taskSources += @(Get-ChildItem tests -Filter *.java | ForEach-Object { $_.FullName })
     $taskSourceLines = @($taskSources | ForEach-Object { '"' + $_.Replace('\', '/') + '"' })
     [IO.File]::WriteAllLines((Join-Path (Get-Location) '.codex-build/sources.txt'),
         [string[]]$taskSourceLines, [Text.UTF8Encoding]::new($false))

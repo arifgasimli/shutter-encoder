@@ -89,6 +89,8 @@ public class LibraryUtils extends Shutter {
 	public static boolean autoAMF = false;
 	public static boolean autoVIDEOTOOLBOX = false;
 	public static boolean autoVULKAN = false;
+	/** Hardware encoder explicitly picked by the user; null means pick a GPU automatically. */
+	public static volatile String userAccelChoice = null;
 	public static Process waveformProcess;
 	public static BufferedWriter waveformWriter;
 	private static StringBuilder getOutputLog;
@@ -271,16 +273,26 @@ public class LibraryUtils extends Shutter {
 	                    }
 	                }
 	
-	                int previousIndex = comboAccel.getSelectedIndex();
 	                comboAccel.setModel(new DefaultComboBoxModel(graphicsAccel.toArray()));
-	                
-	                if (previousIndex <= comboAccel.getModel().getSize())
-	                    comboAccel.setSelectedIndex(previousIndex);
-	
+
+	                //Enable before selecting: the selection listener reads isEnabled()
+	                if (comboAccel.getItemCount() > 1)
+	                    comboAccel.setEnabled(true);
+
 	                if (Utils.loadEncFile != null && !Utils.hwaccel.isEmpty()) {
+	                	//A preset decides
 	                    comboAccel.setSelectedItem(Utils.hwaccel);
 	                    Utils.hwaccel = "";
+	                } else if (userAccelChoice != null && graphicsAccel.contains(userAccelChoice)) {
+	                	//Keep what the user picked, including "none"
+	                    comboAccel.setSelectedItem(userAccelChoice);
+	                } else {
+	                	//Default to the GPU: dedicated GPU encoders come first in the list (NVENC, QSV, AMF, then Vulkan)
+	                    comboAccel.setSelectedIndex(graphicsAccel.size() > 1 ? 1 : 0);
 	                }
+
+	                //GPU decoding/filtering compatibility depends on the selected encoder
+	                checkGPUFiltering();
 	
 	            } catch (Exception e) {
 	            } finally {
@@ -974,7 +986,7 @@ public class LibraryUtils extends Shutter {
 		if (comboAccel.getSelectedItem().equals("Vulkan Video")
 		|| comboGPUDecoding.getSelectedItem().toString().equals("vulkan")
 		|| comboGPUFilter.getSelectedItem().toString().equals("vulkan")
-		|| Libplacebo.useLibplaceboFilters && filterComplex.contains("libplacebo")) //Always need to choose the GPU
+		|| Libplacebo.useLibplaceboFilters.get() && filterComplex.contains("libplacebo")) //Always need to choose the GPU
 		{
 			if (GPUCount > 1) //GPU 0 is always the integrated, GPU 1 is AMD or Nvidia or Intel which should be much faster
 			{

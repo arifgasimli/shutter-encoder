@@ -103,7 +103,7 @@ public class Image extends Shutter {
 				int cropX = Math.round((float)Integer.parseInt(Shutter.textCropPosX.getText()) / imageRatio);
 				int cropY = Math.round((float)Integer.parseInt(Shutter.textCropPosY.getText()) / imageRatio);
 				
-				if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+				if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 				{
 					String crop_x = "crop_x=" + cropX;
 					if (caseMiror.isSelected() && caseRotate.isSelected() == false
@@ -132,6 +132,20 @@ public class Image extends Shutter {
     	return filterComplex;
 	}
 	
+	public static String orientationFilter(boolean enabled, String angle, boolean mirror) {
+		String filter = "";
+		if (enabled) {
+			switch (angle) {
+				case "90": filter = "transpose=1"; break;
+				case "-90": filter = "transpose=2"; break;
+				case "180": filter = "transpose=1,transpose=1"; break;
+				default: break;
+			}
+		}
+		if (mirror) filter += (filter.isEmpty() ? "" : ",") + "hflip";
+		return filter;
+	}
+
 	public static String setRotate(String filterComplex, boolean noGPU) {
 		
 		if (grpResolution.isVisible() || grpImageSequence.isVisible() || comboFonctions.getSelectedItem().toString().equals(language.getProperty("functionRewrap")) || VideoPlayerUI.fullscreenPlayer)
@@ -139,95 +153,17 @@ public class Image extends Shutter {
 			//Checking if last filter is GPU accelerated
 			boolean filterGPU = FunctionUtils.checkPreviousFilter(filterComplex);
 			
-			String rotate = "";
-			if (caseRotate.isSelected()) 
+			// Use the same operations on every backend: rotate, then mirror the output.
+			// Folding these into libplacebo distortion or flipped transpose modes
+			// changes the mirror axis for quarter turns.
+			String rotate = orientationFilter(caseRotate.isSelected(),
+					comboRotate.getSelectedItem().toString(), caseMiror.isSelected());
+			if (!rotate.isEmpty())
 			{
-				String transpose = "";
-				switch (comboRotate.getSelectedItem().toString()) {
-				case "90":					
-					if (caseMiror.isSelected())
-					{
-						if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
-						{
-							filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "rotate=1:extra_opts='distort=on\\:distort_scale_x=-1'");
-						}
-						else
-							transpose = "transpose=3";
-					}
-					else
-					{
-						if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
-						{
-							filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "rotate=1");
-						}
-						else
-							transpose = "transpose=1";
-					}
-					break;
-				case "-90":					
-					if (caseMiror.isSelected())
-					{
-						if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
-						{
-							filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "rotate=3:extra_opts='distort=on\\:distort_scale_x=-1'");
-						}
-						else
-							transpose = "transpose=0";
-					}
-					else
-					{
-						if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
-						{
-							filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "rotate=3");
-						}
-						else
-							transpose = "transpose=2";
-					}
-					break;
-				case "180":					
-					if (caseMiror.isSelected())
-					{
-						if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
-						{
-							filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "rotate=2:extra_opts='distort=on\\:distort_scale_x=-1'");
-						}
-						else
-							transpose = "transpose=1,transpose=1,hflip";
-					}
-					else
-					{
-						if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
-						{
-							filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "rotate=2");
-						}
-						else
-							transpose = "transpose=1,transpose=1";
-					}
-					break;
-				}
-	
-				rotate = transpose;
+				if (!filterComplex.isEmpty()) filterComplex += ",";
+				filterComplex += rotate;
 			}
-			else if (caseMiror.isSelected())
-			{
-				if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
-				{
-					filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "extra_opts='distort=on\\:distort_scale_x=-1'");
-				}
-				else
-					rotate = "hflip";
-			}
-			
-			if (rotate != "")
-			{
-				if (Libplacebo.useLibplaceboFilters == false || filterComplex.contains("hwdownload") || (filterComplex.contains("libplacebo") && filterComplex.substring(filterComplex.indexOf("libplacebo")).contains(",")))
-				{
-					if (filterComplex != "") filterComplex += ",";
-				}
-		
-				filterComplex += rotate;	
-			}
-						
+
 			//Format
 			String bitDepth = FFPROBE.imageDepth == 10 ? "p010" : "nv12";
 						
@@ -543,7 +479,7 @@ public class Image extends Shutter {
 			}*/
 		}
 
-		if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(previousFilter) && filterComplex.contains("scale=") && filterComplex.contains("scale=iw") == false) //scale=iw is used for the watermark scaling
+		if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(previousFilter) && filterComplex.contains("scale=") && filterComplex.contains("scale=iw") == false) //scale=iw is used for the watermark scaling
 		{
 			filterComplex = Libplacebo.setLibplaceboFilter(previousFilter,
 					filterComplex.replaceAll(".*scale=(\\d+):(\\d+).*", "w=$1:h=$2") + ":downscaler=" + setScaleAlgorithm("LIBPLACEBO") + ":upscaler=" + setScaleAlgorithm("LIBPLACEBO") + ":reset_sar=1");
@@ -715,7 +651,7 @@ public class Image extends Shutter {
 			        	//Original sup. à la sortie
 			        	if (iw > ow || ih > oh)
 			        	{
-			        		if (Libplacebo.useLibplaceboFilters && Libplacebo.checkLibplaceboFilter(filterComplex))
+					if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 							{		
 								filterComplex = filterComplex.replace("=-1", "=" + String.valueOf(ow)) + "normalize_sar=true:pad_crop_ratio=1.0";
 							}

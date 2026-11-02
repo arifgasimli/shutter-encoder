@@ -491,7 +491,9 @@ public static StringBuilder errorLog = new StringBuilder();
 	            	//Removes text with [...]
 	            	line = line.replaceFirst("^(?:\\[[^\\]]*\\]\\s*)+", "");
 	            	
-	                errorLog.append(line + System.lineSeparator());
+	            	//Corrupted media can log a decoding error on every frame: keep the report bounded
+	            	if (errorLog.length() < 64 * 1024)
+	            		errorLog.append(line + System.lineSeparator());
 	            }
 	        }
 	    }
