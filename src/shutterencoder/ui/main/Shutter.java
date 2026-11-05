@@ -48,6 +48,8 @@ import java.awt.event.AdjustmentEvent;
 import java.awt.event.AdjustmentListener;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.awt.event.ItemEvent;
 import java.awt.event.ItemListener;
 import java.awt.event.KeyAdapter;
@@ -114,6 +116,8 @@ import javax.swing.ToolTipManager;
 import javax.swing.border.MatteBorder;
 import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.event.ListDataEvent;
 import javax.swing.event.ListDataListener;
 
@@ -660,6 +664,9 @@ public class Shutter {
 	public static JTextField textCropPosX;
 	public static JTextField textCropPosY;
 	public static JTextField textCropWidth;
+	public static JTextField textCropOutWidth;
+	public static JTextField textCropOutHeight;
+	public static JComboBox<String> comboCropScale;
 	public static JTextField textCropHeight;
 	public static JLabel cropLock;
 	public static boolean cropIsLocked = false;
@@ -5455,6 +5462,7 @@ public class Shutter {
 				boolean isPlaying = VideoPlayerUtils.playerIsPlaying();
 				
 				VideoPlayerUI.btnStop.doClick(); //Use VideoPlayer.resizeAll and reload the frame
+				resetCropSelection(); //Crop coordinates belong to the previous orientation
 				
 				if (isPlaying)
 				{
@@ -5486,6 +5494,7 @@ public class Shutter {
 				boolean isPlaying = VideoPlayerUtils.playerIsPlaying();
 				
 				VideoPlayerUI.btnStop.doClick(); //Use VideoPlayer.resizeAll and reload the frame
+				resetCropSelection(); //Crop coordinates belong to the previous orientation
 				
 				if (isPlaying)
 				{
@@ -8587,6 +8596,83 @@ public class Shutter {
 		}
 	}
 
+	private static boolean cropScaleUpdating = false;
+	
+	/** Shows the output size of the cropped area (crop size x scale factor). */
+	public static void refreshCropOutputSize() {
+		showCropOutputSize(false);
+	}
+	
+	private static void showCropOutputSize(boolean force) {
+		if (textCropOutWidth == null || textCropWidth == null)
+			return;
+		
+		int w, h;
+		try {
+			w = Integer.parseInt(textCropWidth.getText().trim());
+			h = Integer.parseInt(textCropHeight.getText().trim());
+		} catch (NumberFormatException e) {
+			return;
+		}
+		
+		if (shutterencoder.functions.settings.Image.cropIsScaled())
+		{
+			w = shutterencoder.functions.settings.Image.cropOutputWidth();
+			h = shutterencoder.functions.settings.Image.cropOutputHeight();
+		}
+		
+		//Do not overwrite a value being typed
+		if (force || textCropOutWidth.isFocusOwner() == false)
+			textCropOutWidth.setText(String.valueOf(w));
+		if (force || textCropOutHeight.isFocusOwner() == false)
+			textCropOutHeight.setText(String.valueOf(h));
+	}
+	
+	/** Turns a typed output width or height into a scale factor, the other side follows the crop ratio. */
+	private static void applyCropOutputSize(boolean fromWidth) {
+		try {
+			int typed = Integer.parseInt((fromWidth ? textCropOutWidth : textCropOutHeight).getText().trim());
+			int crop = Integer.parseInt((fromWidth ? textCropWidth : textCropHeight).getText().trim());
+			if (typed > 0 && crop > 0)
+			{
+				double scale = Math.max(0.01, Math.min(8.0, (double) typed / crop));
+				shutterencoder.functions.settings.Image.cropOutputScale = scale;
+				
+				cropScaleUpdating = true;
+				try {
+					double percent = Math.round(scale * 1000) / 10.0;
+					comboCropScale.setSelectedItem((percent == Math.rint(percent) ? String.valueOf((int) percent) : String.valueOf(percent)) + "%");
+				} finally {
+					cropScaleUpdating = false;
+				}
+			}
+		} catch (NumberFormatException e) {}
+		
+		//Shows the final size, including the side that was not typed
+		showCropOutputSize(true);
+
+		try {
+			FFPROBE.setFilesize();
+		} catch (Exception e) {}
+	}
+	
+	/** Centers the crop selection on the current player frame and refreshes the crop values. */
+	public static void resetCropSelection() {
+		if (caseEnableCrop == null || caseEnableCrop.isSelected() == false)
+			return;
+		
+		comboPreset.setSelectedIndex(0); //Also centers the selection when it was already on "none"
+		selection.setBounds(VideoPlayerUI.player.getWidth() / 4, VideoPlayerUI.player.getHeight() / 4,
+				VideoPlayerUI.player.getWidth() / 2, VideoPlayerUI.player.getHeight() / 2);
+		anchorRight = selection.getLocation().x + selection.getWidth();
+		anchorBottom = selection.getLocation().y + selection.getHeight();
+		overImage.setBounds(0, 0, VideoPlayerUI.player.getWidth(), VideoPlayerUI.player.getHeight());
+		//Old sizes would be used to clamp the new position
+		textCropWidth.setText("");
+		textCropHeight.setText("");
+		VideoPlayerOverlay.checkSelection();
+	}
+	
 	private void grpCrop() {
 
 		grpCrop = new CollapsiblePanel(language.getProperty("frameCropImage"), true);
@@ -8603,7 +8689,7 @@ public class Shutter {
 			@Override
 			public void mousePressed(MouseEvent e) {
 
-				UIController.extendSections(grpCrop, 90);
+				UIController.extendSections(grpCrop, 110);
 			}
 
 		});
@@ -8624,9 +8710,12 @@ public class Shutter {
 				{
 					// Make sure the crop is accurate to pixel resolution
 					float squareRatio = (float) FFPROBE.imageWidth / FFPROBE.imageHeight;
-					if (Shutter.inputDeviceIsRunning == false && FFPROBE.imageRatio != squareRatio) {
-						ratioChanged = true;
-						FFPROBE.imageRatio = squareRatio;
+					if (Shutter.inputDeviceIsRunning == false) {
+						if (FFPROBE.imageRatio != squareRatio) {
+							ratioChanged = true;
+							FFPROBE.imageRatio = squareRatio;
+						}
+						//Always: the player now shows the whole source instead of the output resolution
 						VideoPlayerUI.resizeAll();
 
 						VideoPlayerUI.frameIsComplete = false;
@@ -8651,22 +8740,39 @@ public class Shutter {
 					anchorBottom = selection.getLocation().y + selection.getHeight();
 					VideoPlayerOverlay.checkSelection();
 
+					overImage.setBounds(0, 0, VideoPlayerUI.player.getWidth(), VideoPlayerUI.player.getHeight());
 					VideoPlayerUI.player.add(selection);
 					VideoPlayerUI.player.add(overImage);
 				} else {
 					// Come back to original DAR
 					if (Shutter.inputDeviceIsRunning == false && ratioChanged && VideoPlayerCore.videoPath != null) {
-						FFPROBE.Data(VideoPlayerCore.videoPath);
-						try {
-							FFPROBE.processData.join();
-						} catch (InterruptedException er) {
-						    Thread.currentThread().interrupt();
-						}
-						
+						//Probe off the UI thread: waiting for ffprobe here froze the whole window
+						final String probedPath = VideoPlayerCore.videoPath;
+						new Thread(() -> {
+							FFPROBE.Data(probedPath);
+							try {
+								FFPROBE.processData.join();
+							} catch (InterruptedException er) {
+							    Thread.currentThread().interrupt();
+							    return;
+							}
+
+							SwingUtilities.invokeLater(() -> {
+								if (probedPath.equals(VideoPlayerCore.videoPath) == false)
+									return;
+
+								VideoPlayerUI.resizeAll();
+
+								VideoPlayerUI.frameIsComplete = false;
+
+								VideoPlayerCore.playerSetTime(VideoPlayerCore.playerCurrentFrame);
+							});
+						}, "crop-reprobe").start();
+					}
+					else if (Shutter.inputDeviceIsRunning == false && VideoPlayerCore.videoPath != null) {
+						//Back to the output resolution preview
 						VideoPlayerUI.resizeAll();
-
 						VideoPlayerUI.frameIsComplete = false;
-
 						VideoPlayerCore.playerSetTime(VideoPlayerCore.playerCurrentFrame);
 					}
 					ratioChanged = false;
@@ -8756,7 +8862,7 @@ public class Shutter {
 				{
 					try {
 
-						String s[] = FFPROBE.imageResolution.split("x");
+						String s[] = (shutterencoder.functions.settings.Image.rotatedWidth() + "x" + shutterencoder.functions.settings.Image.rotatedHeight()).split("x");
 						int w = Integer.parseInt(s[0]);
 						int h = Integer.parseInt(s[1]);
 
@@ -8794,12 +8900,12 @@ public class Shutter {
 							textCropPosY.setText(String.valueOf((h - Integer.parseInt(textCropHeight.getText())) / 2));
 						}
 
-						int x = (int) Math.round((float) (Integer.valueOf(textCropPosX.getText()) * VideoPlayerUI.player.getHeight()) / FFPROBE.imageHeight);
+						int x = (int) Math.round((float) (Integer.valueOf(textCropPosX.getText()) * VideoPlayerUI.player.getHeight()) / shutterencoder.functions.settings.Image.rotatedHeight());
 						
-						int y = (int) Math.round((float) (Integer.valueOf(textCropPosY.getText()) * VideoPlayerUI.player.getWidth()) / FFPROBE.imageWidth);
+						int y = (int) Math.round((float) (Integer.valueOf(textCropPosY.getText()) * VideoPlayerUI.player.getWidth()) / shutterencoder.functions.settings.Image.rotatedWidth());
 						
-						int width = (int) Math.ceil((float) (Integer.valueOf(textCropWidth.getText()) * VideoPlayerUI.player.getHeight()) / FFPROBE.imageHeight);
-						int height = (int) Math.floor((float) (Integer.valueOf(textCropHeight.getText()) * VideoPlayerUI.player.getWidth()) / FFPROBE.imageWidth);
+						int width = (int) Math.ceil((float) (Integer.valueOf(textCropWidth.getText()) * VideoPlayerUI.player.getHeight()) / shutterencoder.functions.settings.Image.rotatedHeight());
+						int height = (int) Math.floor((float) (Integer.valueOf(textCropHeight.getText()) * VideoPlayerUI.player.getWidth()) / shutterencoder.functions.settings.Image.rotatedWidth());
 
 						if (width > VideoPlayerUI.player.getWidth())
 							width = VideoPlayerUI.player.getWidth();
@@ -9252,21 +9358,26 @@ public class Shutter {
 
 		// Outside of selection
 		overImage = new JPanel() {
+			private final Color shade = new Color(0, 0, 0, 180);
+
+			// This panel is repainted with every video frame: paint only.
+			// Changing bounds or recalculating the file size here (which edits fields and fires
+			// bitrate listeners that can seek) ran on every frame and stalled the preview.
 			public void paintComponent(Graphics g) {
 				Graphics2D g2d = (Graphics2D) g;
 
-				this.setBounds(0, 0, VideoPlayerUI.player.getWidth(), VideoPlayerUI.player.getHeight());
+				int w = VideoPlayerUI.player.getWidth();
+				int h = VideoPlayerUI.player.getHeight();
+				int x = selection.getX();
+				int y = selection.getY();
+				int sw = selection.getWidth();
+				int sh = selection.getHeight();
 
-				Area outter = new Area(
-						new Rectangle(0, 0, VideoPlayerUI.player.getWidth(), VideoPlayerUI.player.getHeight()));
-				Rectangle inner = new Rectangle(selection.getLocation().x, selection.getLocation().y,
-						selection.getWidth(), selection.getHeight());
-				outter.subtract(new Area(inner));
-
-				g2d.setColor(new Color(0, 0, 0, 180));
-				g2d.fill(outter);
-
-				FFPROBE.setFilesize();
+				g2d.setColor(shade);
+				g2d.fillRect(0, 0, w, Math.max(0, y)); // above
+				g2d.fillRect(0, y + sh, w, Math.max(0, h - (y + sh))); // below
+				g2d.fillRect(0, y, Math.max(0, x), sh); // left
+				g2d.fillRect(x + sw, y, Math.max(0, w - (x + sw)), sh); // right
 			}
 		};
 		overImage.setSize(640, 360);
@@ -9333,7 +9444,7 @@ public class Shutter {
 				if (textCropPosX.getText().length() > 0 && e.getKeyCode() == KeyEvent.VK_ENTER) {
 					int value = (int) Math
 							.round((float) (Integer.valueOf(textCropPosX.getText()) * VideoPlayerUI.player.getHeight())
-									/ FFPROBE.imageHeight);
+									/ shutterencoder.functions.settings.Image.rotatedHeight());
 					selection.setLocation(value, selection.getLocation().y);
 				}
 			}
@@ -9423,7 +9534,7 @@ public class Shutter {
 				if (textCropPosY.getText().length() > 0 && e.getKeyCode() == KeyEvent.VK_ENTER) {
 					int value = (int) Math
 							.round((float) (Integer.valueOf(textCropPosY.getText()) * VideoPlayerUI.player.getWidth())
-									/ FFPROBE.imageWidth);
+									/ shutterencoder.functions.settings.Image.rotatedWidth());
 					selection.setLocation(selection.getLocation().x, value);
 				}
 			}
@@ -9520,7 +9631,7 @@ public class Shutter {
 				if (textCropWidth.getText().length() > 0 && e.getKeyCode() == KeyEvent.VK_ENTER) {
 					int value = (int) Math
 							.round((float) (Integer.valueOf(textCropWidth.getText()) * VideoPlayerUI.player.getHeight())
-									/ FFPROBE.imageHeight);
+									/ shutterencoder.functions.settings.Image.rotatedHeight());
 					selection.setSize(value, selection.getHeight());
 				}
 			}
@@ -9581,7 +9692,7 @@ public class Shutter {
 					textCropWidth.setText(String.valueOf(mouseCropOffsetX + (e.getX() - MousePositionX)));
 					int value = (int) Math
 							.round((float) (Integer.valueOf(textCropWidth.getText()) * VideoPlayerUI.player.getHeight())
-									/ FFPROBE.imageHeight);
+									/ shutterencoder.functions.settings.Image.rotatedHeight());
 					selection.setSize(value, selection.getHeight());
 				}
 
@@ -9632,7 +9743,7 @@ public class Shutter {
 				if (textCropHeight.getText().length() > 0 && e.getKeyCode() == KeyEvent.VK_ENTER) {
 					int value = (int) Math
 							.round((float) (Integer.valueOf(textCropHeight.getText()) * VideoPlayerUI.player.getWidth())
-									/ FFPROBE.imageWidth);
+									/ shutterencoder.functions.settings.Image.rotatedWidth());
 					selection.setSize(selection.getWidth(), value);
 				}
 			}
@@ -9693,7 +9804,7 @@ public class Shutter {
 					textCropHeight.setText(String.valueOf(mouseCropOffsetY + (e.getY() - MousePositionY)));
 					int value = (int) Math
 							.round((float) (Integer.valueOf(textCropHeight.getText()) * VideoPlayerUI.player.getHeight())
-									/ FFPROBE.imageHeight);
+									/ shutterencoder.functions.settings.Image.rotatedHeight());
 					selection.setSize(selection.getWidth(), value);
 				}
 				
@@ -9715,6 +9826,120 @@ public class Shutter {
 		cropPx4.setForeground(Utils.themeColor);
 		cropPx4.setEnabled(false);
 		cropPx4.setBounds(cropPx2.getX(), lblHeight.getY(), cropPosX.getPreferredSize().width, 16);
+
+		// Output size of the cropped area: one scale factor, so the crop ratio is always kept
+		JLabel lblCropOutput = new JLabel(Shutter.language.getProperty("lblCropOutput", "Output:"));
+		lblCropOutput.setHorizontalAlignment(SwingConstants.RIGHT);
+		lblCropOutput.setFont(new Font(Shutter.mainFont, Font.PLAIN, 12));
+		lblCropOutput.setForeground(Utils.themeColor);
+		lblCropOutput.setEnabled(false);
+		lblCropOutput.setBounds(textCropWidth.getX() - lblCropOutput.getPreferredSize().width - 2,
+				textCropWidth.getY() + textCropWidth.getHeight() + 4, lblCropOutput.getPreferredSize().width, 16);
+
+		textCropOutWidth = new JTextField("0");
+		textCropOutWidth.setToolTipText(Shutter.language.getProperty("tooltipCropOutput", "Size of the cropped area in the output file, the ratio is kept"));
+		textCropOutWidth.setBounds(textCropWidth.getX(), lblCropOutput.getY(), textCropWidth.getWidth(), 16);
+		textCropOutWidth.setHorizontalAlignment(SwingConstants.RIGHT);
+		textCropOutWidth.setEnabled(false);
+		textCropOutWidth.setFont(new Font(Shutter.mainFont, Font.PLAIN, 12));
+
+		JLabel lblCropOutX = new JLabel("x");
+		lblCropOutX.setHorizontalAlignment(SwingConstants.CENTER);
+		lblCropOutX.setFont(new Font(Shutter.mainFont, Font.PLAIN, 12));
+		lblCropOutX.setForeground(Utils.themeColor);
+		lblCropOutX.setEnabled(false);
+		lblCropOutX.setBounds(textCropOutWidth.getX() + textCropOutWidth.getWidth(), lblCropOutput.getY(), 10, 16);
+
+		textCropOutHeight = new JTextField("0");
+		textCropOutHeight.setToolTipText(textCropOutWidth.getToolTipText());
+		textCropOutHeight.setBounds(lblCropOutX.getX() + lblCropOutX.getWidth(), lblCropOutput.getY(), textCropWidth.getWidth(), 16);
+		textCropOutHeight.setHorizontalAlignment(SwingConstants.RIGHT);
+		textCropOutHeight.setEnabled(false);
+		textCropOutHeight.setFont(new Font(Shutter.mainFont, Font.PLAIN, 12));
+
+		JLabel cropPx5 = new JLabel("px");
+		cropPx5.setFont(new Font(Shutter.mainFont, Font.PLAIN, 12));
+		cropPx5.setForeground(Utils.themeColor);
+		cropPx5.setEnabled(false);
+		cropPx5.setBounds(textCropOutHeight.getX() + textCropOutHeight.getWidth() + 2, lblCropOutput.getY(),
+				cropPx5.getPreferredSize().width, 16);
+
+		comboCropScale = new JComboBox<String>(new String[] { "100%", "75%", "66%", "50%", "33%", "25%", "150%", "200%" });
+		comboCropScale.setName("comboCropScale");
+		comboCropScale.setToolTipText(textCropOutWidth.getToolTipText());
+		comboCropScale.setEditable(true);
+		comboCropScale.setEnabled(false);
+		comboCropScale.setSelectedIndex(0);
+		comboCropScale.setMaximumRowCount(10);
+		comboCropScale.setFont(new Font(Shutter.mainFont, Font.PLAIN, 11));
+		comboCropScale.setBounds(cropPx5.getX() + cropPx5.getWidth() + 8, lblCropOutput.getY(), 64, 16);
+
+		comboCropScale.addActionListener(new ActionListener() {
+
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if (cropScaleUpdating)
+					return;
+
+				try {
+					double percent = Double.parseDouble(comboCropScale.getSelectedItem().toString().replace("%", "").replace(",", ".").trim());
+					if (percent > 0 && percent <= 800)
+					{
+						shutterencoder.functions.settings.Image.cropOutputScale = percent / 100;
+					}
+				} catch (Exception er) {}
+				refreshCropOutputSize();
+			}
+
+		});
+
+		KeyAdapter cropOutputKeys = new KeyAdapter() {
+
+			@Override
+			public void keyTyped(KeyEvent e) {
+				if (Character.isDigit(e.getKeyChar()) == false && e.getKeyChar() != KeyEvent.VK_BACK_SPACE && e.getKeyChar() != KeyEvent.VK_DELETE)
+					e.consume();
+			}
+
+			@Override
+			public void keyReleased(KeyEvent e) {
+				JTextField source = (JTextField) e.getSource();
+				if (e.getKeyCode() == KeyEvent.VK_ENTER || e.getKeyCode() == KeyEvent.VK_TAB)
+				{
+					applyCropOutputSize(source == textCropOutWidth);
+				}
+			}
+
+		};
+		textCropOutWidth.addKeyListener(cropOutputKeys);
+		textCropOutHeight.addKeyListener(cropOutputKeys);
+
+		FocusAdapter cropOutputFocus = new FocusAdapter() {
+
+			@Override
+			public void focusLost(FocusEvent e) {
+				applyCropOutputSize(e.getSource() == textCropOutWidth);
+			}
+
+		};
+		textCropOutWidth.addFocusListener(cropOutputFocus);
+		textCropOutHeight.addFocusListener(cropOutputFocus);
+
+		// Keep the output size in sync with the crop selection
+		DocumentListener cropSizeListener = new DocumentListener() {
+			public void insertUpdate(DocumentEvent e) { SwingUtilities.invokeLater(Shutter::refreshCropOutputSize); }
+			public void removeUpdate(DocumentEvent e) { SwingUtilities.invokeLater(Shutter::refreshCropOutputSize); }
+			public void changedUpdate(DocumentEvent e) {}
+		};
+		textCropWidth.getDocument().addDocumentListener(cropSizeListener);
+		textCropHeight.getDocument().addDocumentListener(cropSizeListener);
+
+		grpCrop.add(lblCropOutput);
+		grpCrop.add(textCropOutWidth);
+		grpCrop.add(lblCropOutX);
+		grpCrop.add(textCropOutHeight);
+		grpCrop.add(cropPx5);
+		grpCrop.add(comboCropScale);
 
 		grpCrop.add(cropPosX);
 		grpCrop.add(textCropPosX);

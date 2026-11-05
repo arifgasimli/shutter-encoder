@@ -2254,8 +2254,8 @@ public class Utils extends Shutter {
 							if (caseEnableCrop.isSelected())
 							{
 								selection.setLocation((int) Math.round(Integer.valueOf(textCropPosX.getText()) / Shutter.playerRatio), (int) Math.round(Integer.valueOf(textCropPosY.getText()) / Shutter.playerRatio));
-								int w = (int) Math.round((float)  (Integer.valueOf(textCropWidth.getText()) * VideoPlayerUI.player.getHeight()) / FFPROBE.imageHeight);
-								int h = (int) Math.round((float)  (Integer.valueOf(textCropHeight.getText()) * VideoPlayerUI.player.getHeight()) / FFPROBE.imageHeight);
+								int w = (int) Math.round((float)  (Integer.valueOf(textCropWidth.getText()) * VideoPlayerUI.player.getHeight()) / shutterencoder.functions.settings.Image.rotatedHeight());
+								int h = (int) Math.round((float)  (Integer.valueOf(textCropHeight.getText()) * VideoPlayerUI.player.getHeight()) / shutterencoder.functions.settings.Image.rotatedHeight());
 								
 								if (w > VideoPlayerUI.player.getWidth())
 									w = VideoPlayerUI.player.getWidth();

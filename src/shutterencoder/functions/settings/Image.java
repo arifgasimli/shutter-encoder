@@ -37,72 +37,23 @@ public class Image extends Shutter {
 		if (grpResolution.isVisible() || grpImageSequence.isVisible() || comboFonctions.getSelectedItem().toString().equals("Blu-ray"))
 		{	    	
 	    	if (caseEnableCrop.isSelected())
-			{	    		
+			{
 	    		if (comboPreset.getSelectedIndex() == 1)
 	    		{
-	    			LibraryUtils.setCropDetect(file);	  
+	    			LibraryUtils.setCropDetect(file);
 	    		}
 
-				float imageRatio = 1.0f;
-				
-				int ow = FFPROBE.imageWidth;  
-				
-				if (comboFonctions.getSelectedItem().toString().equals("DVD") == false && comboResolution.getSelectedItem().toString().equals(language.getProperty("source")) == false)
-				{
-					if (comboResolution.getSelectedItem().toString().contains("%"))
-					{
-						double value = (double) Integer.parseInt(comboResolution.getSelectedItem().toString().replace("%", "")) / 100;
-						
-						ow = (int) Math.round(ow * value);
-					}					
-					else if (comboResolution.getSelectedItem().toString().contains("x"))
-					{
-						if (comboResolution.getSelectedItem().toString().contains("AI"))
-						{
-							if (Shutter.comboResolution.getSelectedItem().toString().contains("2x"))
-							{
-								ow = (int) Math.round(ow * 2);
-							}
-							else
-							{
-								ow = (int) Math.round(ow * 4);
-							}
-						}
-						else
-						{
-							String s[] = comboResolution.getSelectedItem().toString().split("x");					
-				        	ow = Integer.parseInt(s[0]); 
-						}
-					}
-					else if (comboResolution.getSelectedItem().toString().contains(":"))
-					{
-						String s[] = comboResolution.getSelectedItem().toString().split(":");
-						
-						if (s[0].equals("auto"))
-						{
-							ow = Math.round(FFPROBE.imageHeight / Integer.parseInt(s[1]));
-						}
-						else if (s[1].equals("auto"))
-						{
-							ow = Math.round(FFPROBE.imageWidth / Integer.parseInt(s[0]));
-						}
-						else //ratio like 4:1 etc...
-						{
-							ow = Integer.parseInt(s[1]);
-						}
-					}
+				//The crop always runs on the rotated source, before the resolution scaler
+				//(see VideoEncoders), so the values are used as they are shown in the crop panel
+				int cropWidth = Integer.parseInt(Shutter.textCropWidth.getText());
+				int cropHeight = Integer.parseInt(Shutter.textCropHeight.getText());
+				int cropX = Integer.parseInt(Shutter.textCropPosX.getText());
+				int cropY = Integer.parseInt(Shutter.textCropPosY.getText());
 
-		        	if (VideoEncoders.setScalingFirst())
-					{
-		        		imageRatio = (float) FFPROBE.imageWidth / ow;
-					}
-				}
-				
-				int cropWidth = Math.round((float) Integer.parseInt(Shutter.textCropWidth.getText()) / imageRatio);
-				int cropHeight = Math.round((float) Integer.parseInt(Shutter.textCropHeight.getText()) / imageRatio);
-				int cropX = Math.round((float)Integer.parseInt(Shutter.textCropPosX.getText()) / imageRatio);
-				int cropY = Math.round((float)Integer.parseInt(Shutter.textCropPosY.getText()) / imageRatio);
-				
+				//Output size of the cropped area
+				int outWidth = cropIsScaled() ? cropOutputWidth() : cropWidth;
+				int outHeight = cropIsScaled() ? cropOutputHeight() : cropHeight;
+
 				if (Libplacebo.useLibplaceboFilters.get() && Libplacebo.checkLibplaceboFilter(filterComplex))
 				{
 					String crop_x = "crop_x=" + cropX;
@@ -118,20 +69,88 @@ public class Image extends Shutter {
 						crop_y = "crop_y=ih-" + cropHeight + "-" + cropY;
 					}
 					
-					filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "crop_w=" + cropWidth + ":crop_h=" +  cropHeight + ":" + crop_x + ":" + crop_y + ":w=" + cropWidth + ":h=" + cropHeight + ":reset_sar=1");
+					filterComplex = Libplacebo.setLibplaceboFilter(filterComplex, "crop_w=" + cropWidth + ":crop_h=" +  cropHeight + ":" + crop_x + ":" + crop_y + ":w=" + outWidth + ":h=" + outHeight + ":reset_sar=1");
 				}
 				else
 				{
 					if (filterComplex != "") filterComplex += ",";
-					
+
 					filterComplex += "crop=" + cropWidth + ":" +  cropHeight + ":" + cropX + ":" + cropY;
+
+					if (cropIsScaled())
+					{
+						//Named instance: setScale() rewrites every "scale=" into its GPU variant
+						filterComplex += ",scale@cropsize=" + outWidth + ":" + outHeight + ":flags=" + Settings.comboScale.getSelectedItem().toString();
+					}
 				}
 			}
 		}
-    	
+
     	return filterComplex;
 	}
-	
+
+	/** Scale factor applied to the cropped area: 1 keeps the crop size, 0.5 turns 1000x1000 into 500x500. */
+	public static volatile double cropOutputScale = 1.0;
+
+	public static boolean cropIsScaled() {
+		return Math.abs(cropOutputScale - 1.0) > 0.0001;
+	}
+
+	public static boolean isQuarterTurn() {
+		return caseRotate.isSelected() && (comboRotate.getSelectedIndex() == 1 || comboRotate.getSelectedIndex() == 2);
+	}
+
+	/** Width of the frame the crop is drawn on, i.e. the source after rotation. */
+	public static int rotatedWidth() {
+		return isQuarterTurn() ? FFPROBE.imageHeight : FFPROBE.imageWidth;
+	}
+
+	/** Height of the frame the crop is drawn on, i.e. the source after rotation. */
+	public static int rotatedHeight() {
+		return isQuarterTurn() ? FFPROBE.imageWidth : FFPROBE.imageHeight;
+	}
+
+	private static int cropField(javax.swing.JTextField field) {
+		try {
+			return Integer.parseInt(field.getText().trim());
+		} catch (NumberFormatException e) {
+			return 0;
+		}
+	}
+
+	//Encoders need even dimensions for 4:2:0
+	private static int evenSize(double value) {
+		return Math.max(2, (int) Math.round(value / 2) * 2);
+	}
+
+	public static int cropOutputWidth() {
+		return evenSize(cropField(textCropWidth) * cropOutputScale);
+	}
+
+	public static int cropOutputHeight() {
+		return evenSize(cropField(textCropHeight) * cropOutputScale);
+	}
+
+	/** Size of the frame that reaches the resolution scaler: cropped (and crop-scaled) area, otherwise the rotated source. */
+	private static String scaleInputResolution() {
+
+		if (caseEnableCrop.isSelected() && cropField(textCropWidth) > 0 && cropField(textCropHeight) > 0)
+		{
+			if (cropIsScaled())
+				return cropOutputWidth() + "x" + cropOutputHeight();
+
+			return cropField(textCropWidth) + "x" + cropField(textCropHeight);
+		}
+
+		//Rotation is applied before the scaler unless scaling goes first
+		if (isQuarterTurn() && FFPROBE.imageResolution != null && VideoEncoders.setScalingFirst() == false)
+		{
+			return FFPROBE.imageHeight + "x" + FFPROBE.imageWidth;
+		}
+
+		return FFPROBE.imageResolution;
+	}
+
 	public static String orientationFilter(boolean enabled, String angle, boolean mirror) {
 		String filter = "";
 		if (enabled) {
@@ -235,8 +254,8 @@ public class Image extends Shutter {
 		
 		if (comboResolution.getSelectedItem().toString().equals(language.getProperty("source")) == false && FFPROBE.imageResolution != null)
 		{
-			String i[] = FFPROBE.imageResolution.split("x");        
-			String o[] = FFPROBE.imageResolution.split("x");
+			String i[] = scaleInputResolution().split("x");        
+			String o[] = scaleInputResolution().split("x");
 						
 			if (comboResolution.getSelectedItem().toString().contains("%"))
 			{
@@ -369,7 +388,7 @@ public class Image extends Shutter {
 		}
 		else if (limitToFHD)
 		{
-			String i[] = FFPROBE.imageResolution.split("x");    
+			String i[] = scaleInputResolution().split("x");    
 			String o[] = "1920x1080".split("x");
 			
 			if (comboResolution.getSelectedItem().toString().equals(language.getProperty("source")) == false)
@@ -578,8 +597,8 @@ public class Image extends Shutter {
 		
 		if (comboResolution.getSelectedItem().toString().equals(language.getProperty("source")) == false)
 		{
-			String i[] = FFPROBE.imageResolution.split("x");        
-			String o[] = FFPROBE.imageResolution.split("x");
+			String i[] = scaleInputResolution().split("x");        
+			String o[] = scaleInputResolution().split("x");
 						
 			if (comboResolution.getSelectedItem().toString().contains("%"))
 			{
@@ -684,7 +703,7 @@ public class Image extends Shutter {
 		}
 		else if (limitToFHD)
 		{
-			String i[] = FFPROBE.imageResolution.split("x");    
+			String i[] = scaleInputResolution().split("x");    
 			String o[] = "1920x1080".split("x");
 			
 			if (comboResolution.getSelectedItem().toString().equals(language.getProperty("source")) == false)

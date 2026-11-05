@@ -524,44 +524,10 @@ public class VideoEncoders extends Shutter {
 						}	
 
 						//Scaling									
-			        	if (setScalingFirst()) //Set scaling before or after depending on using a pad or stretch mode			
+			        	if (setScalingFirst()) //Set scaling before or after depending on using a pad or stretch mode
 			        	{
-			        		if (comboResolution.getSelectedItem().toString().contains("AI") && caseEnableCrop.isSelected())
-			        		{
-			        			//Do nothing
-			        		}
-			        		else
-			        		{
-								switch (comboFonctions.getSelectedItem().toString())
-								{
-									//Limit to Full HD
-									case "AVC-Intra 100":
-									case "DNxHD":
-									case "XDCAM HD422":
-									case "XDCAM HD 35":
-									case "DVD" : //Needed 16:9 aspect ratio
-										
-										if (FFPROBE.imageResolution.equals("1440x1080"))
-										{
-											filterComplex = Image.setScale(filterComplex, false, false);	
-											filterComplex = Image.setPad(filterComplex, false, false);			
-										}
-										else
-										{
-											filterComplex = Image.setScale(filterComplex, true, false);	
-											filterComplex = Image.setPad(filterComplex, true, false);		
-										}
-										
-										break;
-										
-									default:
-										
-										filterComplex = Image.setScale(filterComplex, false, false);	
-										filterComplex = Image.setPad(filterComplex, false, false);			
-										break;
-								}	
-			        		}
-			        	}	
+			        		filterComplex = setResolution(filterComplex);
+			        	}
 			        	
 			        	//Rotate
 						filterComplex = Image.setRotate(filterComplex, false);
@@ -648,44 +614,12 @@ public class VideoEncoders extends Shutter {
 						}
 												
 				        //Scaling									
-			        	if (setScalingFirst() == false) //Set scaling before or after depending on using a pad or stretch mode			
+			        	//With the crop applied last, the resolution must be applied to the cropped area, after the crop
+			        	boolean scaleAfterCrop = caseEnableCrop.isSelected() && setCroppingLast();
+			        	if (setScalingFirst() == false && scaleAfterCrop == false) //Set scaling before or after depending on using a pad or stretch mode
 			        	{
-			        		if (comboResolution.getSelectedItem().toString().contains("AI") && caseEnableCrop.isSelected())
-			        		{
-			        			//Do nothing
-			        		}
-			        		else
-			        		{
-								switch (comboFonctions.getSelectedItem().toString())
-								{
-									//Limit to Full HD
-									case "AVC-Intra 100":
-									case "DNxHD":
-									case "XDCAM HD422":
-									case "XDCAM HD 35":
-									case "DVD" : //Needed 16:9 aspect ratio
-										
-										if (FFPROBE.imageResolution.equals("1440x1080"))
-										{
-											filterComplex = Image.setScale(filterComplex, false, false);	
-											filterComplex = Image.setPad(filterComplex, false, false);			
-										}
-										else
-										{
-											filterComplex = Image.setScale(filterComplex, true, false);	
-											filterComplex = Image.setPad(filterComplex, true, false);		
-										}
-										
-										break;
-										
-									default:
-										
-										filterComplex = Image.setScale(filterComplex, false, false);	
-										filterComplex = Image.setPad(filterComplex, false, false);			
-										break;
-								}	
-			        		}
-			        	}			    
+			        		filterComplex = setResolution(filterComplex);
+			        	}
 				        
 						//DAR
 						filterComplex = Image.setDAR(filterComplex);
@@ -739,6 +673,11 @@ public class VideoEncoders extends Shutter {
 				        {
 							filterComplex = Image.setCrop(filterComplex, file);
 				        }
+
+						if (scaleAfterCrop)
+						{
+							filterComplex = setResolution(filterComplex);
+						}
 										
 		            	//Audio
 			            if (comboFonctions.getSelectedItem().toString().equals("DV"))
@@ -1261,6 +1200,44 @@ public class VideoEncoders extends Shutter {
 		
     }
 	
+	/** Output resolution (scale + pad), including the Full HD limit of some broadcast codecs. */
+	private static String setResolution(String filterComplex) {
+
+		//Cropping is made inside the upscale statement
+		if (comboResolution.getSelectedItem().toString().contains("AI") && caseEnableCrop.isSelected())
+		{
+			return filterComplex;
+		}
+
+		switch (comboFonctions.getSelectedItem().toString())
+		{
+			//Limit to Full HD
+			case "AVC-Intra 100":
+			case "DNxHD":
+			case "XDCAM HD422":
+			case "XDCAM HD 35":
+			case "DVD" : //Needed 16:9 aspect ratio
+
+				if (FFPROBE.imageResolution.equals("1440x1080"))
+				{
+					filterComplex = Image.setScale(filterComplex, false, false);
+					filterComplex = Image.setPad(filterComplex, false, false);
+				}
+				else
+				{
+					filterComplex = Image.setScale(filterComplex, true, false);
+					filterComplex = Image.setPad(filterComplex, true, false);
+				}
+
+				return filterComplex;
+
+			default:
+
+				filterComplex = Image.setScale(filterComplex, false, false);
+				return Image.setPad(filterComplex, false, false);
+		}
+	}
+
 	public static boolean setScalingFirst() {
 		
 		//Options that need to be before scaling

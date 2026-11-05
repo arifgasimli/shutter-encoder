@@ -56,6 +56,14 @@ features that require them need those dependencies installed separately.
 - Bound memory: console logs, the FFmpeg error report and the seek frame buffer.
 - Write Java source argument files as UTF-8 without a BOM for compatibility with
   both Windows PowerShell 5.1 and PowerShell 7.
+- Crop on the whole rotated source and apply the output resolution to the cropped
+  area when cropping last; reset the crop selection when the orientation changes.
+- Set the crop's output size with one scale factor (typed width or height), so the
+  crop ratio is kept and the encoded size is even.
+- Show a live picture while dragging the timeline with a dedicated scrub decoder,
+  falling back to the nearest keyframe when exact seeks are slow.
+- Keep the crop overlay paint-only and run the source probe off the UI thread,
+  which stalled the preview and froze the window.
 
 ## Build and test
 

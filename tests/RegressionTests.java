@@ -103,5 +103,6 @@ public class RegressionTests extends Shutter {
         if (failures != 0) throw new AssertionError(failures + " regression check(s) failed");
         OrientationTests.runTests(args[0]);
         RangeTests.runTests(args[0]);
+        CropTests.runTests(args[0]);
     }
 }

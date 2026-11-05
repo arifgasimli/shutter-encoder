@@ -47,8 +47,8 @@ public class VideoPlayerOverlay extends Shutter {
 
 	public static void checkSelection() {
 		
-		double ratioW = (double) FFPROBE.imageWidth / VideoPlayerUI.player.getWidth();
-		double ratioH = (double) FFPROBE.imageHeight / VideoPlayerUI.player.getHeight();
+		double ratioW = (double) shutterencoder.functions.settings.Image.rotatedWidth() / VideoPlayerUI.player.getWidth();
+		double ratioH = (double) shutterencoder.functions.settings.Image.rotatedHeight() / VideoPlayerUI.player.getHeight();
 				
 		int outW = (int) Math.round(Shutter.selection.getWidth() * ratioW);
 		int outH = (int) Math.round(Shutter.selection.getHeight() * ratioH);
@@ -58,21 +58,21 @@ public class VideoPlayerOverlay extends Shutter {
 					
 		if (Shutter.textCropWidth.getText().matches("[0-9]+") && Shutter.textCropHeight.getText().matches("[0-9]+"))
 		{
-			if (Px + Integer.valueOf(Shutter.textCropWidth.getText()) > FFPROBE.imageWidth)
+			if (Px + Integer.valueOf(Shutter.textCropWidth.getText()) > shutterencoder.functions.settings.Image.rotatedWidth())
 			{
-				Px = Px + (FFPROBE.imageWidth - (Px + Integer.valueOf(Shutter.textCropWidth.getText())));
+				Px = Px + (shutterencoder.functions.settings.Image.rotatedWidth() - (Px + Integer.valueOf(Shutter.textCropWidth.getText())));
 			}
 			
-			if (Py + Integer.valueOf(Shutter.textCropHeight.getText()) > FFPROBE.imageHeight)
+			if (Py + Integer.valueOf(Shutter.textCropHeight.getText()) > shutterencoder.functions.settings.Image.rotatedHeight())
 			{
-				Py = Py + (FFPROBE.imageHeight - (Py + Integer.valueOf(Shutter.textCropHeight.getText())));
+				Py = Py + (shutterencoder.functions.settings.Image.rotatedHeight() - (Py + Integer.valueOf(Shutter.textCropHeight.getText())));
 			}
 						
-			if (Integer.valueOf(Shutter.textCropWidth.getText()) != FFPROBE.imageWidth)
+			if (Integer.valueOf(Shutter.textCropWidth.getText()) != shutterencoder.functions.settings.Image.rotatedWidth())
 			{
 				Shutter.textCropPosX.setText(String.valueOf(Px));
 			}
-			if (Integer.valueOf(Shutter.textCropHeight.getText()) != FFPROBE.imageHeight)
+			if (Integer.valueOf(Shutter.textCropHeight.getText()) != shutterencoder.functions.settings.Image.rotatedHeight())
 			{
 				Shutter.textCropPosY.setText(String.valueOf(Py));
 			}
@@ -88,6 +88,12 @@ public class VideoPlayerOverlay extends Shutter {
 			Shutter.textCropWidth.setText(String.valueOf(outW));
 			Shutter.textCropHeight.setText(String.valueOf(outH));
 		}
+
+		//The crop size changes the estimated file size (previously recalculated on every painted frame)
+		Shutter.overImage.repaint();
+		try {
+			FFPROBE.setFilesize();
+		} catch (Exception e) {}
 	}
 	
 	public static void refreshTimecodeAndText() {

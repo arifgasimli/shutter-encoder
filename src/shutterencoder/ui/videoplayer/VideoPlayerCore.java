@@ -106,6 +106,214 @@ public class VideoPlayerCore extends VideoPlayerUI {
     private static Double pendingSeek;
     private static String pendingSeekPath;
     private static long seekRevision;
+    private static volatile boolean forceDecoderRestart = false;
+    //Scrubbing: time taken by the last frame-accurate seek while dragging, to decide when to fall back to keyframes
+    private static final long MAX_ACCURATE_SCRUB_MS = 250;
+    private static volatile long accurateScrubMs = 0;
+    private static volatile boolean lastScrubSeekAccurate = false;
+
+    /** Called when a new drag starts: measure the cost of frame-accurate seeking again. */
+    public static void resetScrubTiming() {
+    	accurateScrubMs = 0;
+    }
+
+    /*
+     * Scrub preview: while the waveform cursor or a range boundary is dragged, frames come from a
+     * dedicated one-shot decoder instead of the playback pipeline. Each request replaces the previous
+     * one (latest wins), a failed decode keeps the last picture instead of blanking the player, and
+     * the playback decoder is only restarted once, on release.
+     */
+    private static final Object scrubLock = new Object();
+    private static Thread scrubWorker;
+    private static double scrubTarget = Double.NaN;
+    private static long scrubGeneration = 0;
+    private static boolean scrubActive = false;
+    private static Process scrubProcess;
+    private static boolean scrubProcessPreemptible;
+    private static long scrubProcessStart;
+    //Above this cost, show the nearest keyframe first and refine to the exact frame once the cursor rests
+    private static final long SCRUB_ACCURATE_MAX_MS = 150;
+    private static volatile long scrubAccurateMs = 0;
+
+    /** True when the scrub decoder can render the current media; otherwise the regular seek is used. */
+    public static boolean scrubPreviewSupported() {
+    	return videoPath != null && FFPROBE.audioOnly == false && Shutter.inputDeviceIsRunning == false
+    			&& Shutter.caseEnableSequence.isSelected() == false && Shutter.caseAddSubtitles.isSelected() == false
+    			&& Shutter.doNotLoadImage == false && fileDuration > 40
+    			&& Shutter.comboFonctions.getSelectedItem().equals(Shutter.language.getProperty("functionSubtitles")) == false;
+    }
+
+    /** Called on mouse press over the waveform. */
+    public static void beginScrub() {
+    	resetScrubTiming();
+    	synchronized (scrubLock) {
+    		scrubGeneration++;
+    		scrubActive = true;
+    		scrubTarget = Double.NaN;
+    		scrubAccurateMs = 0;
+    	}
+    	//Playback would keep overwriting the scrubbed picture; it resumes on release (playerSetTime)
+    	if (playerIsPlaying())
+    		playerLoop = false;
+    	VideoPlayerUtils.preview = null;
+    	VideoPlayerUtils.invalidatePreview();
+    }
+
+    /** Requests the picture of a frame while dragging. Never blocks the caller. */
+    public static void scrubPreview(double frame) {
+    	synchronized (scrubLock) {
+    		if (scrubActive == false) return;
+    		scrubTarget = Math.max(0, Math.min(totalFrames - 1, Math.floor(frame)));
+    		if (scrubProcess != null && (scrubProcessPreemptible
+    				|| System.currentTimeMillis() - scrubProcessStart > SCRUB_ACCURATE_MAX_MS)) {
+    			//A refinement is optional, and a slow exact decode would hold every newer position back
+    			if (scrubProcessPreemptible == false)
+    				scrubAccurateMs = Long.MAX_VALUE;
+    			scrubProcess.destroyForcibly();
+    		}
+    		if (scrubWorker == null || scrubWorker.isAlive() == false) {
+    			scrubWorker = new Thread(VideoPlayerCore::scrubLoop, "scrub-preview");
+    			scrubWorker.setDaemon(true);
+    			scrubWorker.start();
+    		}
+    		scrubLock.notifyAll();
+    	}
+    }
+
+    /** Called on release, before the regular seek takes over. */
+    public static void endScrub() {
+    	synchronized (scrubLock) {
+    		scrubGeneration++;
+    		scrubActive = false;
+    		scrubTarget = Double.NaN;
+    		if (scrubProcess != null)
+    			scrubProcess.destroyForcibly();
+    		scrubLock.notifyAll();
+    	}
+    }
+
+    private static void scrubLoop() {
+    	double shown = Double.NaN;
+    	long shownGeneration = -1;
+    	while (true) {
+    		double target;
+    		long generation;
+    		synchronized (scrubLock) {
+    			while (scrubActive == false || Double.isNaN(scrubTarget)
+    					|| (scrubTarget == shown && scrubGeneration == shownGeneration)) {
+    				try {
+    					scrubLock.wait();
+    				} catch (InterruptedException e) {
+    					return;
+    				}
+    			}
+    			target = scrubTarget;
+    			generation = scrubGeneration;
+    		}
+
+    		try {
+    			if (scrubAccurateMs > SCRUB_ACCURATE_MAX_MS) {
+    				BufferedImage quick = decodeScrubFrame(target, true, generation, false);
+    				showScrubFrame(quick, target, generation);
+
+    				//Cursor at rest: replace the keyframe with the exact frame
+    				if (isLatestScrub(target, generation)) {
+    					long start = System.currentTimeMillis();
+    					BufferedImage exact = decodeScrubFrame(target, false, generation, true);
+    					if (exact != null) {
+    						scrubAccurateMs = System.currentTimeMillis() - start;
+    						showScrubFrame(exact, target, generation);
+    					}
+    				}
+    			} else {
+    				long start = System.currentTimeMillis();
+    				BufferedImage exact = decodeScrubFrame(target, false, generation, false);
+    				if (exact != null) {
+    					scrubAccurateMs = System.currentTimeMillis() - start;
+    					showScrubFrame(exact, target, generation);
+    				} else if (isLatestScrub(target, generation)) {
+    					//Exact decode failed (end of file, odd seek): fall back to the nearest keyframe
+    					showScrubFrame(decodeScrubFrame(target, true, generation, false), target, generation);
+    				}
+    			}
+    		} catch (Exception e) {}
+
+    		shown = target;
+    		shownGeneration = generation;
+    	}
+    }
+
+    private static boolean isLatestScrub(double target, long generation) {
+    	synchronized (scrubLock) {
+    		return scrubActive && scrubGeneration == generation && scrubTarget == target;
+    	}
+    }
+
+    private static void showScrubFrame(BufferedImage image, double target, long generation) {
+    	if (image == null) return;
+    	synchronized (VideoPlayerCore.class) { //readFrame lock
+    		synchronized (scrubLock) {
+    			if (scrubActive == false || scrubGeneration != generation) return;
+    		}
+    		frameVideo = image;
+    	}
+    	player.repaint();
+    	VideoPlayerUtils.getTimePoint(target);
+    }
+
+    /** Decodes one frame as a self-describing image, so a size mismatch can never garble or blank it. */
+    private static BufferedImage decodeScrubFrame(double frame, boolean keyFrameOnly, long generation, boolean preemptible) throws Exception {
+
+    	String extension = videoPath.substring(videoPath.lastIndexOf("."));
+    	String format = FFPROBE.videoFormat != null ? " -f " + FFPROBE.videoFormat : "";
+    	String seek = keyFrameOnly ? " -skip_frame nokey -noaccurate_seek" : "";
+    	String output = FFPROBE.hasAlpha
+    			? " -c:v png -compression_level 0 -pix_fmt rgba"
+    			: " -c:v bmp -pix_fmt bgr24";
+
+    	String args = Colorimetry.setInputCodec(extension) + " -strict " + Settings.comboStrict.getSelectedItem()
+    			+ " -v quiet -hide_banner -nostdin" + format + seek
+    			+ " -ss " + (long) (frame * inputFramerateMS) + "ms -i " + '"' + videoPath + '"'
+    			+ setFilter(true, true) + " -frames:v 1" + output + " -an -sn -f image2pipe -";
+
+    	ProcessBuilder pb = new ProcessBuilder(formatCommand(args));
+    	pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+    	if (System.getProperty("os.name").contains("Windows"))
+    		pb.directory(new File(Utils.getLibraryPath()).getParentFile());
+    	else if (LibraryUtils.libplaceboAvailable)
+    		FFMPEG.setEnvironment(pb);
+
+    	Process process;
+    	synchronized (scrubLock) {
+    		if (scrubActive == false || scrubGeneration != generation) return null;
+    		process = pb.start();
+    		scrubProcess = process;
+    		scrubProcessPreemptible = preemptible;
+    		scrubProcessStart = System.currentTimeMillis();
+    	}
+
+    	try {
+    		byte[] data;
+    		try (InputStream in = process.getInputStream()) {
+    			data = in.readAllBytes();
+    		}
+    		if (data.length == 0) return null;
+    		BufferedImage image = javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(data));
+    		if (image == null) return null;
+    		if (FFPROBE.hasAlpha && image.getType() != BufferedImage.TYPE_4BYTE_ABGR) {
+    			//readFrame writes into an ABGR raster of the same size
+    			BufferedImage abgr = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_4BYTE_ABGR);
+    			abgr.getGraphics().drawImage(image, 0, 0, null);
+    			image = abgr;
+    		}
+    		return image;
+    	} finally {
+    		process.destroyForcibly();
+    		synchronized (scrubLock) {
+    			if (scrubProcess == process) scrubProcess = null;
+    		}
+    	}
+    }
     private static long lastEvTime = 0;
     private static String freezeFrame = "";
         	
@@ -755,7 +963,8 @@ public class VideoPlayerCore extends VideoPlayerUI {
 				return;
 			}
 
-			if ((frameVideo != null || playerCurrentFrame > 0)
+			//A running decoder is enough to seek: a lost frame at position 0 must not block seeking forever
+			if ((frameVideo != null || playerCurrentFrame > 0 || playerVideo != null)
 			&& playerThread != null && Shutter.doNotLoadImage == false && videoPath != null)
 			{
 				// Only a seek that really runs makes a pending still preview obsolete.
@@ -795,7 +1004,10 @@ public class VideoPlayerCore extends VideoPlayerUI {
 						{
 							VideoPlayerUtils.preview = null;
 						}					
-						else if (FFPROBE.audioOnly == false && (mouseIsPressed || frameControl) && playerIsPlaying() == false && playerCurrentFrame != requestedFrame && freezeFrame == "" && Shutter.comboFonctions.getSelectedItem().equals(Shutter.language.getProperty("functionSubtitles")) == false)
+						else if (FFPROBE.audioOnly == false && (mouseIsPressed || frameControl) && playerIsPlaying() == false && playerCurrentFrame != requestedFrame && freezeFrame == "" && Shutter.comboFonctions.getSelectedItem().equals(Shutter.language.getProperty("functionSubtitles")) == false
+						//Reading ahead needs a live stream and a decoded frame to size reads from;
+						//otherwise every small step failed silently and the preview stayed blank
+						&& frameVideo != null && playerVideo != null && playerVideo.isAlive() && forceDecoderRestart == false)
 						{
 							useBuffer = true;
 						}			
@@ -858,7 +1070,11 @@ public class VideoPlayerCore extends VideoPlayerUI {
 									}
 									else
 										readFrame(videoInputStream, frameVideo.getWidth(), frameVideo.getHeight(), true);
-									
+
+									//Incomplete read: the stream ended or was replaced
+									if (frameVideo == null)
+										throw new IOException("Preview stream ended while reading ahead");
+
 									playerCurrentFrame += 1;
 									
 									//Limit the buffer size into memory: by frame count and by bytes, large players would otherwise use GBs
@@ -887,8 +1103,18 @@ public class VideoPlayerCore extends VideoPlayerUI {
 								
 							} catch (Exception er) {							
 								//System.out.println("CLEARED");
+								bufferIsReadingFrames = false;
 								bufferedFrames.clear();
 								bufferCurrentFrame = 0;
+
+								//Recover with a normal seek (new decoder) unless a newer request is already queued
+								forceDecoderRestart = true;
+								synchronized (setTimeLock) {
+									if (pendingSeek == null) {
+										pendingSeek = requestedFrame;
+										pendingSeekPath = videoPath;
+									}
+								}
 							}
 						}
 						else if (bufferedFrames.size() > 1 && framesToSkipBackward < bufferedFrames.size() - 1 && framesToSkip < 0 && useBuffer) //Read available buffered frames backward
@@ -950,7 +1176,8 @@ public class VideoPlayerCore extends VideoPlayerUI {
 							playerPlayVideo = false;
 																		
 							final double time = requestedFrame;
-							
+
+							final long seekStart = System.currentTimeMillis();
 							Future<Process> nextVideoProcess = videoProcessExecutor.submit(() -> startVideoProcess(time));
 	
 							playerStop();
@@ -972,10 +1199,16 @@ public class VideoPlayerCore extends VideoPlayerUI {
 							}
 	
 							playerProcess(requestedFrame, started);
-							
+							forceDecoderRestart = false;
+
 							playerLoop = true;
-							VideoPlayerCore.waitForLastFrame();																										
-							VideoPlayerUtils.getTimePoint(requestedFrame); 
+							VideoPlayerCore.waitForLastFrame();
+
+							//Remember how long a frame-accurate seek takes while dragging
+							if (mouseIsPressed && lastScrubSeekAccurate)
+								accurateScrubMs = System.currentTimeMillis() - seekStart;
+
+							VideoPlayerUtils.getTimePoint(requestedFrame);
 							Shutter.timecode.repaint();
 							
 							frameControl = false;
@@ -1248,19 +1481,26 @@ public class VideoPlayerCore extends VideoPlayerUI {
 				if (FFPROBE.videoFormat != null)
 					format = " -f " + FFPROBE.videoFormat;
 					
-				String keyFrames = "";
-				
-				if (framesToSkip > maximumSeek || 0 - framesToSkip > maximumSeek)
-				{
-					keyFrames = " -skip_frame nokey";
-				}
-				
+				// Keyframe-only decoding is fast but only shows keyframes (often seconds apart), so the
+				// picture appeared frozen while scrubbing. Decode the exact frame unless that has proven slow.
+				boolean keyFramesOnly = (framesToSkip > maximumSeek || 0 - framesToSkip > maximumSeek)
+						&& accurateScrubMs > MAX_ACCURATE_SCRUB_MS;
+
+				String keyFrames = keyFramesOnly ? " -skip_frame nokey -noaccurate_seek" : ""; //nearest keyframe before the target, not after
+
 				decodingOptions = format + keyFrames + " -nostdin -flags2 +fast -fflags +nobuffer+flush_packets -err_detect ignore_err";
-				freezeFrame = " -analyzeduration 0 -probesize 32 -frames:v 1";	
+
+				// A keyframe stream is a single frame. An accurate stream keeps decoding so the
+				// following forward steps can read ahead from it (the green buffer line).
+				freezeFrame = keyFramesOnly ? " -analyzeduration 0 -probesize 32 -frames:v 1" : "";
+				lastScrubSeekAccurate = keyFramesOnly == false;
 			}
 			else
+			{
 				freezeFrame = "";
-			
+				lastScrubSeekAccurate = mouseIsPressed;
+			}
+
 			//Format
 			String colorFormat = "rgb565le";
 			if (FFPROBE.hasAlpha)
@@ -1590,16 +1830,21 @@ public class VideoPlayerCore extends VideoPlayerUI {
 
 		//Crop & Pad
 		if (Shutter.comboResolution.getSelectedItem().toString().equals(Shutter.language.getProperty("source")) == false && Shutter.comboResolution.getSelectedItem().toString().contains("AI") == false && Shutter.inputDeviceIsRunning == false)
-		{				
-			filter = shutterencoder.functions.settings.Image.setScale(filter, false, noGPU);
+		{
+			//While cropping, the whole rotated source is shown so the selection maps to source pixels;
+			//the output resolution is applied to the cropped area at encoding time
+			if (Shutter.caseEnableCrop.isSelected() == false || isPiping)
+			{
+				filter = shutterencoder.functions.settings.Image.setScale(filter, false, noGPU);
 
-			if (filter.contains("scale"))
-			{
-				filter += shutterencoder.functions.settings.Image.setPad("", false, noGPU);
-			}
-			else if (filter.contains("libplacebo") && filter.contains("w=") && Shutter.lblPad.getText().equals(Shutter.language.getProperty("lblStretch")) == false)
-			{
-				filter = shutterencoder.functions.settings.Image.setPad(filter, false, noGPU);
+				if (filter.contains("scale"))
+				{
+					filter += shutterencoder.functions.settings.Image.setPad("", false, noGPU);
+				}
+				else if (filter.contains("libplacebo") && filter.contains("w=") && Shutter.lblPad.getText().equals(Shutter.language.getProperty("lblStretch")) == false)
+				{
+					filter = shutterencoder.functions.settings.Image.setPad(filter, false, noGPU);
+				}
 			}
 		}
 		else			

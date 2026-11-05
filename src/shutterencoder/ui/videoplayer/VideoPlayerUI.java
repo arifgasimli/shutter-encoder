@@ -2547,14 +2547,24 @@ public class VideoPlayerUI {
                     updateDraggedBoundary();
                     if (waveformSeekTimer != null) waveformSeekTimer.stop();
                     waveformSeekFrame = Double.NaN;
+                    //Dedicated scrub decoder: live picture while dragging, regular seek on release
+                    final boolean scrub = VideoPlayerCore.scrubPreviewSupported();
+                    if (scrub)
+                        VideoPlayerCore.beginScrub();
+                    else
+                        VideoPlayerCore.resetScrubTiming();
                     waveformSeekTimer = new javax.swing.Timer(30, event -> {
                         if (!mouseIsPressed) return;
                         double frame = Math.min(totalFrames - 1, waveformCursorFrame());
                         if (frame != waveformSeekFrame) {
                             waveformSeekFrame = frame;
-                            VideoPlayerCore.playerSetTime(frame);
+                            if (scrub)
+                                VideoPlayerCore.scrubPreview(frame);
+                            else
+                                VideoPlayerCore.playerSetTime(frame);
                         }
                     });
+                    waveformSeekTimer.setInitialDelay(0);
                     waveformSeekTimer.start();
 
                 }
@@ -2573,6 +2583,7 @@ public class VideoPlayerUI {
                 {						
                     updateDraggedBoundary();
                     if (waveformSeekTimer != null) waveformSeekTimer.stop();
+                    VideoPlayerCore.endScrub();
                     boundaryDragInProgress = false;
                     VideoPlayerCore.dragSegmentIndex = -1;
                     mouseIsPressed = false;
@@ -3910,6 +3921,10 @@ public class VideoPlayerUI {
 				else
 					ratio = Float.parseFloat(Shutter.comboDAR.getSelectedItem().toString());
 			}
+			else if (Shutter.caseEnableCrop.isSelected() && isPiping == false)
+			{
+				//Crop selection is made on the whole rotated source (ratio set above)
+			}
 			else if (Shutter.comboResolution.getSelectedItem().toString().equals(Shutter.language.getProperty("source")) == false && Shutter.btnNoUpscale.isSelected() == false
 			&& Shutter.comboResolution.getSelectedItem().toString().contains("x")
 			&& Shutter.comboResolution.getSelectedItem().toString().contains("AI") == false)
@@ -3986,7 +4001,7 @@ public class VideoPlayerUI {
 				VideoPlayerCore.maxBufferedFrames = (int) ((double) (Shutter.availableMemory / 3) / (player.getWidth() * player.getHeight() * 3));
 			}
 			
-			Shutter.playerRatio = (float) FFPROBE.imageWidth / player.getWidth();
+			Shutter.playerRatio = (float) shutterencoder.functions.settings.Image.rotatedWidth() / player.getWidth();
 			
 			int thumbsHeight = caseShowThumbnails.isSelected() && caseShowThumbnails.isVisible() ? 28 : 0;
 			
@@ -4076,11 +4091,12 @@ public class VideoPlayerUI {
 			//grpCrop
 			Shutter.frameCropX = player.getLocation().x;
 			Shutter.frameCropY = player.getLocation().y;
+			Shutter.overImage.setBounds(0, 0, player.getWidth(), player.getHeight());
 			if (Shutter.caseEnableCrop.isSelected())
 			{
 				Shutter.selection.setLocation((int) Math.round(Integer.valueOf(Shutter.textCropPosX.getText()) / Shutter.playerRatio), (int) Math.round(Integer.valueOf(Shutter.textCropPosY.getText()) / Shutter.playerRatio));
-				int w = (int) Math.round((double)  (Integer.valueOf(Shutter.textCropWidth.getText()) * player.getHeight()) / FFPROBE.imageHeight);
-				int h = (int) Math.round((double)  (Integer.valueOf(Shutter.textCropHeight.getText()) * player.getHeight()) / FFPROBE.imageHeight);
+				int w = (int) Math.round((double)  (Integer.valueOf(Shutter.textCropWidth.getText()) * player.getHeight()) / shutterencoder.functions.settings.Image.rotatedHeight());
+				int h = (int) Math.round((double)  (Integer.valueOf(Shutter.textCropHeight.getText()) * player.getHeight()) / shutterencoder.functions.settings.Image.rotatedHeight());
 				
 				if (w > player.getWidth())
 					w = player.getWidth();
