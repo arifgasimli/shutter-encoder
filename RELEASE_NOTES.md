@@ -1,4 +1,4 @@
-# Shutter Encoder 20.4 — Windows portable fork, revision 2
+# Shutter Encoder 20.4 — Windows portable fork, revision 3
 
 Unofficial Windows x64 build based on upstream `ad0cae5`.
 
@@ -6,7 +6,21 @@ Download **ShutterEncoder.exe** and double-click it. Java, FFmpeg, and FFprobe
 are embedded; no CMD script or neighboring application folder is required.
 First launch extracts the runtime into the user's local application cache.
 
-## Changes since revision 1
+## Changes since revision 2
+
+### Defaults
+- Maximum quality by default: "Max. Quality" is checked (slowest, highest-quality
+  encoder preset) and the bitrate/quality list is set to "best", also after
+  Reset and when the GPU encoder or VBR/CQ mode changes. With a GPU encoder this
+  is constant quality 1, which produces very large files.
+- Adding video files selects H.264 (.mp4); adding audio files selects MP3
+  (320 kbps). A function chosen by the user or by a preset is never replaced.
+
+### Update check removed
+- No update check or self-updater at startup, and the "disable update" setting
+  is gone. The download dialog used for AI models is kept.
+
+## Changes in revision 2
 
 ### Preview and memory
 - Close the preview's audio lines and every process of a filter pipeline.
