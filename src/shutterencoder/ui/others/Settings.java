@@ -137,7 +137,6 @@ public class Settings {
 	public static JComboBox<String> comboAction = new JComboBox<String>();
 	public static JCheckBox btnDisableAnimations = new JCheckBox(Shutter.language.getProperty("btnDisableAnimations"));
 	public static JCheckBox btnDisableSound = new JCheckBox(Shutter.language.getProperty("btnDisableSound"));
-	public static JCheckBox btnDisableUpdate = new JCheckBox(Shutter.language.getProperty("btnDisableUpdate"));
 	public static JCheckBox btnDisableVideoPlayer = new JCheckBox(Shutter.language.getProperty("btnDisableVideoPlayer"));	
 	public static JCheckBox btnDisableMinimizedWindow = new JCheckBox(Shutter.language.getProperty("btnDisableMinimizedWindow"));	
 	public static JCheckBox btnPreventSleepMode = new JCheckBox(Shutter.language.getProperty("btnPreventSleepMode"));
@@ -173,7 +172,6 @@ public class Settings {
 		btnSetBab.setName("btnSetBab");
 		btnDisableAnimations.setName("btnDisableAnimations");
 		btnDisableSound.setName("btnDisableSound");	
-		btnDisableUpdate.setName("btnDisableUpdate");
 		btnDisableVideoPlayer.setName("btnDisableVideoPlayer");
 		btnDisableMinimizedWindow.setName("btnDisableMinimizedWindow");
 		btnPreventSleepMode.setName("btnPreventSleepMode");
@@ -397,12 +395,9 @@ public class Settings {
 		btnDisableSound.setBounds(12, btnDisableAnimations.getLocation().y + btnDisableAnimations.getHeight() + 10, btnDisableSound.getPreferredSize().width, 16);
 		frame.getContentPane().add(btnDisableSound);
 
-		btnDisableUpdate.setFont(new Font(Shutter.mainFont, Font.PLAIN, 12));
-		btnDisableUpdate.setBounds(12, btnDisableSound.getLocation().y + btnDisableSound.getHeight() + 10, btnDisableUpdate.getPreferredSize().width, 16);
-		frame.getContentPane().add(btnDisableUpdate);
 		
 		btnDisableVideoPlayer.setFont(new Font(Shutter.mainFont, Font.PLAIN, 12));
-		btnDisableVideoPlayer.setBounds(12, btnDisableUpdate.getLocation().y + btnDisableUpdate.getHeight() + 10, btnDisableVideoPlayer.getPreferredSize().width, 16);
+		btnDisableVideoPlayer.setBounds(12, btnDisableSound.getLocation().y + btnDisableSound.getHeight() + 10, btnDisableVideoPlayer.getPreferredSize().width, 16);
 		frame.getContentPane().add(btnDisableVideoPlayer);
 		
 		btnDisableVideoPlayer.addActionListener(new ActionListener() {

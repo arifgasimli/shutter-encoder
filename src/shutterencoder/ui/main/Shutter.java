@@ -191,7 +191,6 @@ import shutterencoder.ui.others.Renamer;
 import shutterencoder.ui.others.RenderQueue;
 import shutterencoder.ui.others.SceneDetection;
 import shutterencoder.ui.others.Settings;
-import shutterencoder.ui.others.Update;
 import shutterencoder.ui.others.VideoWeb;
 import shutterencoder.ui.renderers.AntiAliasedRoundRectangle;
 import shutterencoder.ui.renderers.CollapsiblePanel;
@@ -1370,10 +1369,99 @@ public class Shutter {
 			t.start();
 		}
 
-		if (Settings.btnDisableUpdate.isSelected() == false)
-			Update.newVersion();
+		applyMaxQualityDefaults();
+
+		//Pick H.264 for video files and MP3 for audio files as soon as files are added
+		list.addListDataListener(new javax.swing.event.ListDataListener() {
+			@Override
+			public void intervalAdded(javax.swing.event.ListDataEvent e) {
+				SwingUtilities.invokeLater(Shutter::autoSelectFunction);
+			}
+			@Override
+			public void intervalRemoved(javax.swing.event.ListDataEvent e) {}
+			@Override
+			public void contentsChanged(javax.swing.event.ListDataEvent e) {}
+		});
+		if (list.getSize() > 0)
+			SwingUtilities.invokeLater(Shutter::autoSelectFunction);
 
 		availableMemory = Runtime.getRuntime().maxMemory() - Runtime.getRuntime().totalMemory() + Runtime.getRuntime().freeMemory();
+	}
+
+	private static final java.util.Set<String> AUTO_AUDIO_EXTENSIONS = new java.util.HashSet<String>(java.util.Arrays.asList(
+			"mp3", "wav", "aif", "aiff", "aifc", "m4a", "flac", "alac", "aac", "ac3", "eac3", "ec3", "dts", "ogg", "oga", "opus",
+			"wma", "w64", "mka", "amr", "ape", "wv", "caf", "mp2", "mpa", "thd", "au", "snd"));
+
+	private static final java.util.Set<String> AUTO_VIDEO_EXTENSIONS = new java.util.HashSet<String>(java.util.Arrays.asList(
+			"mp4", "m4v", "mov", "qt", "mkv", "webm", "avi", "mxf", "flv", "f4v", "wmv", "asf", "mpg", "mpeg", "m2v", "mpv",
+			"ts", "mts", "m2ts", "tod", "vob", "3gp", "3g2", "ogv", "dv", "dif", "divx", "xvid", "rm", "rmvb", "y4m", "hevc",
+			"h264", "264", "h265", "265", "braw", "r3d", "mod", "vro", "nut", "ivf", "gif"));
+
+	//The function this class picked itself: only that choice, or none, is replaced when files change
+	private static String autoSelectedFunction = null;
+
+	/** Selects H.264 (.mp4) for video files and MP3 for audio files, unless the user or a preset chose a function. */
+	public static void autoSelectFunction() {
+
+		if (list.getSize() == 0 || Settings.modelIsSaving || comboFonctions == null)
+			return;
+
+		if (Settings.btnLoadPreset.isSelected() && Settings.comboLoadPreset.getItemCount() > 0)
+			return;
+
+		Object selected = comboFonctions.getSelectedItem();
+		String current = selected == null ? "" : selected.toString();
+		if (current.isEmpty() == false && current.equals(autoSelectedFunction) == false)
+			return;
+
+		String target = null;
+		for (int i = 0; i < list.getSize() && target == null; i++)
+		{
+			String name = list.getElementAt(i);
+			int dot = name.lastIndexOf('.');
+			if (dot < 0 || dot < Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\')))
+				continue;
+
+			String ext = name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
+			if (AUTO_VIDEO_EXTENSIONS.contains(ext))
+				target = "H.264";
+			else if (AUTO_AUDIO_EXTENSIONS.contains(ext))
+				target = "MP3";
+		}
+
+		if (target == null || target.equals(current))
+			return;
+
+		autoSelectedFunction = target;
+		comboFonctions.setSelectedItem(target);
+
+		if ("H.264".equals(target) && comboFilter.getItemCount() > 0 && ".mp4".equals(comboFilter.getItemAt(0)))
+			comboFilter.setSelectedIndex(0);
+
+		applyMaxQualityDefaults();
+	}
+
+	/** Selects the best entry of the video bitrate / quality list, if it has one. */
+	public static void selectBestVideoQuality() {
+
+		String best = language.getProperty("lblBest");
+		for (int i = 0; i < debitVideo.getItemCount(); i++)
+		{
+			if (best.equalsIgnoreCase(debitVideo.getItemAt(i)))
+			{
+				debitVideo.setSelectedIndex(i);
+				return;
+			}
+		}
+	}
+
+	/** Default to maximum quality: "Max. Quality" encoding and the best bitrate / quality value. */
+	public static void applyMaxQualityDefaults() {
+
+		if (caseQMax.isEnabled() && caseQMax.isSelected() == false)
+			caseQMax.doClick();
+
+		selectBestVideoQuality();
 	}
 
 	private void topBar() {
@@ -17957,7 +18045,7 @@ public class Shutter {
 				new String[] { "50000", "40000", "30000", "25000", "20000", "15000", "10000", "8000", "5000", "3000",
 						"2500", "2000", "1500", "1000", "500", language.getProperty("lblBest").toLowerCase(),
 						language.getProperty("lblGood").toLowerCase(), "auto" }));
-		debitVideo.setSelectedIndex(debitVideo.getModel().getSize() - 1);
+		selectBestVideoQuality();
 		debitVideo.setMaximumRowCount(20);
 		debitVideo.setFont(new Font(mainFont, Font.PLAIN, 11));
 		debitVideo.setEditable(true);
@@ -18380,7 +18468,7 @@ public class Shutter {
 						values[256] = language.getProperty("lblWorst");
 						
 						debitVideo.setModel(new DefaultComboBoxModel<String>(values));
-						debitVideo.setSelectedIndex(127);
+						selectBestVideoQuality();
 					}
 					else
 					{
@@ -18392,7 +18480,7 @@ public class Shutter {
 						values[52] = language.getProperty("lblWorst");
 						
 						debitVideo.setModel(new DefaultComboBoxModel<String>(values));
-						debitVideo.setSelectedIndex(23);
+						selectBestVideoQuality();
 					}
 					
 					lblVideoBitrate.setText(language.getProperty("lblValue"));
@@ -18406,7 +18494,7 @@ public class Shutter {
 							"25000", "20000", "15000", "10000", "8000", "5000", "3000", "2500", "2000", "1500", "1000",
 							"500", language.getProperty("lblBest").toLowerCase(),
 							language.getProperty("lblGood").toLowerCase(), "auto" }));
-					debitVideo.setSelectedIndex(debitVideo.getModel().getSize() - 1);
+					selectBestVideoQuality();
 					lblVideoBitrate.setText(language.getProperty("lblVideoBitrate"));
 					lblKbsH264.setVisible(true);
 					h264lines.setVisible(true);
@@ -18550,7 +18638,7 @@ public class Shutter {
 							"25000", "20000", "15000", "10000", "8000", "5000", "3000", "2500", "2000", "1500", "1000",
 							"500", language.getProperty("lblBest").toLowerCase(),
 							language.getProperty("lblGood").toLowerCase(), "auto" }));
-					debitVideo.setSelectedIndex(debitVideo.getModel().getSize() - 1);
+					selectBestVideoQuality();
 					maximumBitrate.setEnabled(true);
 					maximumBitrate.setSelectedIndex(maximumBitrate.getModel().getSize() - 1);
 					bitrateSize.setEnabled(true);
@@ -19198,6 +19286,8 @@ public class Shutter {
 							new String[] { "Rec. 601", "Rec. 709", "Rec. 2020", "SDR" }));
 					comboOutColormatrix.setSelectedIndex(1);
 
+					applyMaxQualityDefaults();
+
 					topPanel.repaint();
 					statusBar.repaint();
 					topImage.repaint();
@@ -19618,7 +19708,7 @@ public class Shutter {
 								"25000", "20000", "15000", "10000", "8000", "5000", "3000", "2500", "2000", "1500",
 								"1000", "500", language.getProperty("lblBest").toLowerCase(),
 								language.getProperty("lblGood").toLowerCase(), "auto" }));
-						debitVideo.setSelectedIndex(debitVideo.getModel().getSize() - 1);
+						selectBestVideoQuality();
 						lblVideoBitrate.setText(language.getProperty("lblVideoBitrate"));
 						lblKbsH264.setVisible(true);
 						h264lines.setVisible(true);
@@ -19640,7 +19730,7 @@ public class Shutter {
 							values[256] = language.getProperty("lblWorst");
 							
 							debitVideo.setModel(new DefaultComboBoxModel<String>(values));
-							debitVideo.setSelectedIndex(127);
+							selectBestVideoQuality();
 						}
 					}
 
@@ -19700,7 +19790,7 @@ public class Shutter {
 						values[52] = language.getProperty("lblWorst");
 						
 						debitVideo.setModel(new DefaultComboBoxModel<String>(values));
-						debitVideo.setSelectedIndex(23);
+						selectBestVideoQuality();
 					}
 					
 					caseForcerEntrelacement.setEnabled(true);

@@ -62,6 +62,11 @@ features that require them need those dependencies installed separately.
   crop ratio is kept and the encoded size is even.
 - Show a live picture while dragging the timeline with a dedicated scrub decoder,
   falling back to the nearest keyframe when exact seeks are slow.
+- Default to maximum quality: "Max. Quality" checked and the "best" bitrate/quality
+  value, also after Reset and when the GPU encoder or VBR/CQ mode changes.
+- Automatically select H.264 (.mp4) when video files are added and MP3 (320 kbps)
+  for audio files, unless the user or a preset chose another function.
+- Remove the update check and its "disable update" setting.
 - Keep the crop overlay paint-only and run the source probe off the UI thread,
   which stalled the preview and froze the window.
 
